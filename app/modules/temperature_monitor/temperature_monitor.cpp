@@ -2,6 +2,7 @@
 
 #include "app_params.hpp"
 #include "services/logger.hpp"
+#include "utils/fixed_point.hpp"
 
 namespace app {
 
@@ -83,13 +84,13 @@ void TemperatureMonitor::on_tick(std::uint64_t /*now_ms*/) {
     last_value_ = value;
     has_value_  = true;
     samples_.fetch_add(1);
-    LOGD(kTag, "T=%s C", events::DeciStr(value).s);
+    LOGD(kTag, "T=%s C", utils::Fixed(value, 1).c_str());
     ctx_->bus.publish(svc::Event::make(events::kTemperature, events::TemperatureSample{value}));
 }
 
 int TemperatureMonitor::on_command(int /*argc*/, char** /*argv*/, svc::CommandOutput& out) {
     if (has_value_) {
-        out.print("temperature: %s C\r\n", events::DeciStr(last_value_.load()).s);
+        out.print("temperature: %s C\r\n", utils::Fixed(last_value_.load(), 1).c_str());
     } else {
         out.print("temperature: n/a\r\n");
     }

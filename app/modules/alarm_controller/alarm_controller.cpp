@@ -4,6 +4,7 @@
 
 #include "app_params.hpp"
 #include "services/logger.hpp"
+#include "utils/fixed_point.hpp"
 
 namespace app {
 
@@ -73,11 +74,11 @@ void AlarmController::enter_level(AlarmLevel lvl) {
     ctx_->leds.set(svc::LedId::Alarm, pattern);
     if (prev == lvl) return;
 
-    const events::DeciStr t(last_temp_);
+    const utils::Fixed t(last_temp_, 1);
     if (lvl == AlarmLevel::Normal) {
-        LOGI(kTag, "%s -> %s (T=%s C)", events::to_string(prev), events::to_string(lvl), t.s);
+        LOGI(kTag, "%s -> %s (T=%s C)", events::to_string(prev), events::to_string(lvl), t.c_str());
     } else {
-        LOGW(kTag, "%s -> %s (T=%s C)", events::to_string(prev), events::to_string(lvl), t.s);
+        LOGW(kTag, "%s -> %s (T=%s C)", events::to_string(prev), events::to_string(lvl), t.c_str());
     }
     ctx_->bus.publish(svc::Event::make(events::kAlarmStateChanged, events::AlarmStateChanged{prev, lvl, last_temp_}));
 }

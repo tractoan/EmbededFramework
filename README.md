@@ -29,14 +29,17 @@ Mục tiêu:
 │  Queue<T,N> · time · Critical    │  IBoard (ID logic -> chân vật lý)   │
 │  ports: posix │ freertos │ ...   │  ports: linux_sim │ stm32f4 │ ...   │
 ├──────────────────────────────────┴─────────────────────────────────────┤
-│ CORE (core/)   Status · NonCopyable · crc32 · config.hpp (cấu hình)    │
+│ UTILS (utils/) crc32/crc16 · fixed-point format · RingBuffer (SPSC)    │
+├────────────────────────────────────────────────────────────────────────┤
+│ CORE (core/)   Status · NonCopyable · config.hpp · compiler macros     │
 └────────────────────────────────────────────────────────────────────────┘
    Vendor SDK / Kernel: STM32Cube HAL, FreeRTOS, Zephyr, Linux, ESP-IDF...
 ```
 
 | Lớp | Trách nhiệm | KHÔNG được làm | Cơ chế đa hình |
 |---|---|---|---|
-| **Core** | Kiểu lỗi chung, tiện ích, cấu hình tĩnh | Phụ thuộc bất kỳ thứ gì | – |
+| **Core** | Kiểu nền tảng: mã lỗi, cấu hình tĩnh, NonCopyable, macro compiler | Phụ thuộc bất kỳ thứ gì | – |
+| **Utils** | Thuật toán & cấu trúc dữ liệu thuần: CRC, định dạng fixed-point, ring buffer | Phụ thuộc OS, phần cứng, nghiệp vụ | – (hàm/template thuần) |
 | **HAL** | Trừu tượng ngoại vi: GPIO, UART, I2C, NV storage; `IBoard` ánh xạ ID logic → phần cứng | Gọi OSAL, chứa logic nghiệp vụ, biết tới sản phẩm | **Runtime** (interface ảo) → mock được, nhiều instance |
 | **OSAL** | Thread, mutex, semaphore, queue, thời gian, vùng găng | Truy cập phần cứng | **Link-time** (chọn port khi build) → zero-overhead |
 | **Service & Middleware** | Dịch vụ dùng chung: event bus, tham số, CLI, log, LED, driver thiết bị | Chứa quy tắc nghiệp vụ của sản phẩm; gọi API vendor trực tiếp | Interface (`ITemperatureSensor`, `ILogSink`, `ICommandHandler`) |
@@ -47,8 +50,8 @@ Mục tiêu:
 ### Quy tắc phụ thuộc (được CMake ép buộc)
 
 ```
-core ◄── osal ◄──┐
-core ◄── hal  ◄──┴── services ◄── app_framework ◄── modules ◄── product ◄── firmware(main)
+core ◄── utils ◄── osal ◄──┐
+              ◄── hal  ◄──┴── services ◄── app_framework ◄── modules ◄── product ◄── firmware(main)
 ```
 
 Mỗi lớp chỉ `target_link_libraries` tới lớp ngay dưới → include sai lớp sẽ **lỗi biên dịch**.
@@ -63,7 +66,8 @@ embedded-platform/
 ├── CMakeLists.txt              # EP_PLATFORM, EP_PRODUCT
 ├── cmake/platforms/            # linux_sim.cmake, stm32f4_freertos.cmake  (chọn port)
 ├── cmake/toolchains/           # arm-none-eabi.cmake
-├── core/include/core/          # status.hpp, config.hpp, crc32.hpp, ...
+├── core/include/core/          # status.hpp, config.hpp, noncopyable.hpp, compiler.hpp
+├── utils/include/utils/        # crc.hpp, fixed_point.hpp, ring_buffer.hpp
 ├── osal/
 │   ├── include/osal/           # API trung lập: thread, mutex, semaphore, queue, time, critical
 │   └── ports/{posix,freertos}/ # osal_port_types.hpp + osal_<os>.cpp
@@ -190,7 +194,14 @@ cmake -B build-my -DEP_PRODUCT=my_product
    (tham khảo `osal_freertos.cpp`, ~100 dòng).
 3. Đặt `EP_OSAL_PORT=<os>` trong file platform. `Queue<T,N>` tự động hoạt động vì được viết trên Mutex/Semaphore.
 
-### 5.5 Thêm loại thiết bị
+### 5.5 Thêm tiện ích dùng chung
+
+Thuật toán / cấu trúc dữ liệu **không phụ thuộc OS, phần cứng hay nghiệp vụ** (checksum, mã hóa
+COBS/base64, bộ lọc số, PID, bitfield...) đặt trong `utils/` (namespace `utils`), kèm test trong
+`tests/test_utils.cpp`. Mọi lớp từ OSAL/HAL trở lên đều dùng được.
+Thứ gì cần mutex/thread (vd. `osal::Queue`) thuộc OSAL; thứ gì gắn với event/tham số thuộc Services.
+
+### 5.6 Thêm loại thiết bị
 
 Định nghĩa interface thiết bị trong `services/include/services/drivers/` (vd. `IPressureSensor`), driver cụ thể
 dùng interface HAL, thêm con trỏ vào `app::Devices`, khởi tạo trong `System::bring_up_devices()`.
@@ -255,6 +266,7 @@ Port STM32 và FreeRTOS là **mẫu tham khảo** – chưa được biên dịc
 | Pattern | Ở đâu |
 |---|---|
 | Layered Architecture + Dependency Rule | Toàn bộ, ép bằng CMake |
+| Lock-free SPSC buffer (ISR → thread) | `utils::RingBuffer` |
 | Adapter / Bridge | HAL ports, OSAL ports |
 | Abstract Factory | `hal::IBoard` |
 | Dependency Injection / Composition Root | `SystemContext`, `app::System` |

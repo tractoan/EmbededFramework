@@ -5,4 +5,4 @@ add_library(ep_hal STATIC ${EP_HAL_PORT_SOURCES})
 target_include_directories(ep_hal
   PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/include
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ports/${EP_HAL_PORT})
-target_link_libraries(ep_hal PUBLIC ep_core PRIVATE ${EP_HAL_PORT_LIBS})
+target_link_libraries(ep_hal PUBLIC ep_core ep_utils PRIVATE ${EP_HAL_PORT_LIBS})

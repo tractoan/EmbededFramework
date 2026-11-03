@@ -7,6 +7,7 @@
 #include "app_events.hpp"
 #include "app_params.hpp"
 #include "services/logger.hpp"
+#include "utils/fixed_point.hpp"
 
 namespace product {
 
@@ -44,9 +45,8 @@ public:
 
     void on_tick(std::uint64_t /*now_ms*/) override {
         if (n_ == 0) return;
-        using app::events::DeciStr;
-        LOGI("stats", "T min/avg/max = %s / %s / %s C over %lu samples, %lu alarm transitions", DeciStr(min_).s,
-             DeciStr(static_cast<std::int32_t>(sum_ / n_)).s, DeciStr(max_).s, static_cast<unsigned long>(n_),
+        LOGI("stats", "T min/avg/max = %s / %s / %s C over %lu samples, %lu alarm transitions", utils::Fixed(min_, 1).c_str(),
+             utils::Fixed(static_cast<std::int32_t>(sum_ / n_), 1).c_str(), utils::Fixed(max_, 1).c_str(), static_cast<unsigned long>(n_),
              static_cast<unsigned long>(transitions_));
         min_ = INT32_MAX;
         max_ = INT32_MIN;

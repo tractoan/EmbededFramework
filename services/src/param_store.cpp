@@ -2,7 +2,7 @@
 
 #include <cstring>
 
-#include "core/crc32.hpp"
+#include "utils/crc.hpp"
 
 namespace svc {
 
@@ -118,7 +118,7 @@ core::Status ParamStore::save() {
     const std::size_t body = hdr.count * sizeof(Record);
     if (sizeof(Header) + body + sizeof(std::uint32_t) > storage_->size()) return core::Status::NoMemory;
 
-    const std::uint32_t crc = core::crc32(recs.data(), body, core::crc32(&hdr, sizeof(hdr)));
+    const std::uint32_t crc = utils::crc32(recs.data(), body, utils::crc32(&hdr, sizeof(hdr)));
     core::Status st = storage_->erase();
     if (core::is_ok(st)) st = storage_->write(0, &hdr, sizeof(hdr));
     if (core::is_ok(st)) st = storage_->write(sizeof(hdr), recs.data(), body);
@@ -141,7 +141,7 @@ core::Status ParamStore::load() {
     st = storage_->read(sizeof(hdr), recs.data(), body);
     if (core::is_ok(st)) st = storage_->read(sizeof(hdr) + body, &stored_crc, sizeof(stored_crc));
     if (!core::is_ok(st)) return st;
-    if (core::crc32(recs.data(), body, core::crc32(&hdr, sizeof(hdr))) != stored_crc) return core::Status::Corrupted;
+    if (utils::crc32(recs.data(), body, utils::crc32(&hdr, sizeof(hdr))) != stored_crc) return core::Status::Corrupted;
 
     osal::LockGuard g(mtx_);
     for (std::size_t r = 0; r < hdr.count; ++r) {

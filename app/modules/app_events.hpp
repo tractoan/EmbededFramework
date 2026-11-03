@@ -1,7 +1,6 @@
 #pragma once
 // Hợp đồng giao tiếp giữa các module nghiệp vụ: chỉ qua Event (loose coupling).
 #include <cstdint>
-#include <cstdio>
 
 #include "services/event.hpp"
 
@@ -35,14 +34,5 @@ inline const char* to_string(AlarmLevel l) {
     }
     return "?";
 }
-
-// "-12.3" từ -123
-struct DeciStr {
-    char s[16];
-    explicit DeciStr(std::int32_t v) {
-        const long a = v < 0 ? -static_cast<long>(v) : v;
-        std::snprintf(s, sizeof(s), "%s%ld.%ld", v < 0 ? "-" : "", a / 10, a % 10);
-    }
-};
 
 }  // namespace app::events
