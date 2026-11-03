@@ -1,8 +1,16 @@
 #pragma once
 // Mock HAL / device: cho phép test nghiệp vụ & service hoàn toàn không cần phần cứng.
 #include <array>
+#include <chrono>
 #include <cstring>
+#include <deque>
+#include <mutex>
+#include <string>
+#include <thread>
 #include <vector>
+
+#include "comm/byte_stream.hpp"
+#include "utils/crc.hpp"
 
 #include "hal/gpio.hpp"
 #include "hal/storage.hpp"
@@ -69,5 +77,69 @@ public:
     }
     std::vector<svc::Event> events;
 };
+
+// Stream giả lập kênh truyền: test "gửi" byte vào (feed), đọc lại byte thiết bị trả ra (tx).
+class ScriptedStream final : public comm::IByteStream {
+public:
+    void feed(const std::vector<std::uint8_t>& bytes) {
+        std::lock_guard<std::mutex> g(m_);
+        rx_.insert(rx_.end(), bytes.begin(), bytes.end());
+    }
+    void feed(const std::string& text) { feed(std::vector<std::uint8_t>(text.begin(), text.end())); }
+    std::vector<std::uint8_t> tx() const {
+        std::lock_guard<std::mutex> g(m_);
+        return tx_;
+    }
+    std::string tx_text() const {
+        auto t = tx();
+        return std::string(t.begin(), t.end());
+    }
+    void clear_tx() {
+        std::lock_guard<std::mutex> g(m_);
+        tx_.clear();
+    }
+
+    std::size_t write(const std::uint8_t* d, std::size_t n, std::uint32_t) override {
+        std::lock_guard<std::mutex> g(m_);
+        tx_.insert(tx_.end(), d, d + n);
+        return n;
+    }
+    std::size_t read(std::uint8_t* d, std::size_t n, std::uint32_t timeout_ms) override {
+        {
+            std::lock_guard<std::mutex> g(m_);
+            std::size_t k = 0;
+            while (k < n && !rx_.empty()) {
+                d[k++] = rx_.front();
+                rx_.pop_front();
+            }
+            if (k > 0) return k;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(timeout_ms < 5 ? timeout_ms : 5));
+        return 0;
+    }
+
+private:
+    mutable std::mutex m_;
+    std::deque<std::uint8_t> rx_;
+    std::vector<std::uint8_t> tx_;
+};
+
+// Chờ điều kiện (tối đa timeout) – cho test có thread.
+template <typename Pred>
+bool wait_until(Pred pred, int timeout_ms = 1000) {
+    for (int t = 0; t < timeout_ms; t += 5) {
+        if (pred()) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return pred();
+}
+
+// Tạo khung Modbus RTU: thêm CRC (byte thấp trước).
+inline std::vector<std::uint8_t> rtu(std::vector<std::uint8_t> pdu) {
+    const std::uint16_t crc = utils::crc16_modbus(pdu.data(), pdu.size());
+    pdu.push_back(static_cast<std::uint8_t>(crc & 0xFF));
+    pdu.push_back(static_cast<std::uint8_t>(crc >> 8));
+    return pdu;
+}
 
 }  // namespace mock

@@ -9,6 +9,7 @@ TEST(utils_crc_known_vectors) {
     const char* s = "123456789";   // check value chuẩn của các thuật toán CRC
     CHECK_EQ(utils::crc32(s, 9), 0xCBF43926u);
     CHECK_EQ(utils::crc16_ccitt(s, 9), 0x29B1u);
+    CHECK_EQ(utils::crc16_modbus(s, 9), 0x4B37u);
     // Tính nối tiếp nhiều khối phải bằng tính một lần
     CHECK_EQ(utils::crc32(s + 4, 5, utils::crc32(s, 4)), 0xCBF43926u);
     CHECK_EQ(utils::crc16_ccitt(s + 4, 5, utils::crc16_ccitt(s, 4)), 0x29B1u);

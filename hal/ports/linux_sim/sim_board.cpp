@@ -13,6 +13,10 @@ public:
         status_led_.configure(PinMode::Output);
         alarm_led_.configure(PinMode::Output);
         button_.configure(PinMode::InputPullUp);
+        if (!core::is_ok(aux_.open(UartConfig{}))) {
+            std::fprintf(stderr, "[SIM] aux UART: cannot bind udp port %u (disabled)\n", aux_.port());
+            aux_ok_ = false;
+        }
         return console_.open(UartConfig{});
     }
 
@@ -27,7 +31,11 @@ public:
         }
     }
 
-    IUart* uart(UartId id) override { return id == UartId::Console ? &console_ : nullptr; }
+    IUart* uart(UartId id) override {
+        if (id == UartId::Console) return &console_;
+        if (id == UartId::Aux && aux_ok_) return &aux_;
+        return nullptr;
+    }
     II2c* i2c(I2cId id) override { return id == I2cId::Sensor ? &i2c_ : nullptr; }
     INvStorage* storage() override { return &storage_; }
 
@@ -42,6 +50,8 @@ private:
     sim::SimGpio alarm_led_{"AlarmLed", false};   // thay đổi pattern đã được log bởi LedService
     sim::SimGpio button_{"UserButton", true};
     sim::SimConsoleUart console_;
+    sim::SimUdpUart aux_{15020};
+    bool aux_ok_ = true;
     sim::SimI2c i2c_;
     sim::SimFileStorage storage_{4096};
 };

@@ -7,6 +7,7 @@
 # Yêu cầu project CubeMX:
 #   - Bật "Generate peripheral initialization as a pair of .c/.h files per peripheral"
 #     (để MX_USART2_UART_Init, MX_I2C1_Init... nằm ngoài main.c)
+#   - Bật USART2 (console) và USART3 (Aux: RS485/telemetry), I2C1 (cảm biến)
 #   - Dùng TIMx làm timebase cho HAL (SysTick dành cho FreeRTOS)
 #   - main.c của CubeMX bị loại bỏ; SystemClock_Config() copy sang
 #     platform/stm32f4_freertos/clock_config.c

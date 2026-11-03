@@ -31,12 +31,13 @@ target_compile_options(ep_options INTERFACE
   $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions -fno-rtti>)
 
 # Thứ tự = thứ tự phụ thuộc. Quy tắc phụ thuộc được ép bởi target_link_libraries:
-#   core <- utils <- osal, hal <- services <- app(framework, modules) <- product <- firmware
+#   core <- utils <- osal, hal <- services <- middleware <- app(framework, modules) <- product <- firmware
 add_subdirectory(core)
 add_subdirectory(utils)
 add_subdirectory(osal)
 add_subdirectory(hal)
 add_subdirectory(services)
+add_subdirectory(middleware)
 add_subdirectory(app)
 add_subdirectory(${EP_PRODUCT_DIR} product)
 

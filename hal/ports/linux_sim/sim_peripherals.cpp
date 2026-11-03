@@ -1,11 +1,15 @@
 #include "sim_peripherals.hpp"
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <poll.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <cstring>
 #include <thread>
 #include <vector>
@@ -53,6 +57,57 @@ std::size_t SimConsoleUart::read(std::uint8_t* data, std::size_t len, std::uint3
         return 0;
     }
     return static_cast<std::size_t>(n);
+}
+
+// -------------------------------------------------------------- UDP UART
+static_assert(sizeof(sockaddr_in) <= 16, "peer storage too small");
+
+Status SimUdpUart::open(const UartConfig& /*cfg*/) {
+    if (const char* env = std::getenv("EP_SIM_AUX_PORT")) port_ = static_cast<std::uint16_t>(std::atoi(env));
+    fd_ = ::socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd_ < 0) return Status::Error;
+    sockaddr_in addr{};
+    addr.sin_family      = AF_INET;
+    addr.sin_port        = htons(port_);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (::bind(fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+        close();
+        return Status::Busy;
+    }
+    return Status::Ok;
+}
+
+void SimUdpUart::close() {
+    if (fd_ >= 0) ::close(fd_);
+    fd_ = -1;
+}
+
+std::size_t SimUdpUart::write(const std::uint8_t* data, std::size_t len, std::uint32_t /*timeout_ms*/) {
+    if (fd_ < 0 || !has_peer_) return 0;   // chưa có ai kết nối: bỏ dữ liệu
+    const ssize_t n = ::sendto(fd_, data, len, 0, reinterpret_cast<const sockaddr*>(peer_), sizeof(sockaddr_in));
+    return n > 0 ? static_cast<std::size_t>(n) : 0;
+}
+
+std::size_t SimUdpUart::read(std::uint8_t* data, std::size_t len, std::uint32_t timeout_ms) {
+    if (fd_ < 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(timeout_ms));
+        return 0;
+    }
+    if (rx_pos_ >= rx_len_) {
+        pollfd pfd{fd_, POLLIN, 0};
+        const int wait = timeout_ms > 60000u ? 60000 : static_cast<int>(timeout_ms);
+        if (::poll(&pfd, 1, wait) <= 0) return 0;
+        socklen_t plen = sizeof(sockaddr_in);
+        const ssize_t n = ::recvfrom(fd_, rx_, sizeof(rx_), 0, reinterpret_cast<sockaddr*>(peer_), &plen);
+        if (n <= 0) return 0;
+        has_peer_ = true;
+        rx_len_   = static_cast<std::size_t>(n);
+        rx_pos_   = 0;
+    }
+    const std::size_t n = std::min(len, rx_len_ - rx_pos_);
+    std::memcpy(data, rx_ + rx_pos_, n);
+    rx_pos_ += n;
+    return n;
 }
 
 // ------------------------------------------------------------------- I2C

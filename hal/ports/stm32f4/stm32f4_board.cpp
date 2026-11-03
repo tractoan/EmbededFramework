@@ -8,6 +8,7 @@
 
 extern "C" {
 extern UART_HandleTypeDef huart2;
+extern UART_HandleTypeDef huart3;   // Aux: RS485 / telemetry
 extern I2C_HandleTypeDef hi2c1;
 }
 
@@ -166,7 +167,8 @@ public:
         status_led_.configure(PinMode::Output);
         alarm_led_.configure(PinMode::Output);
         button_.configure(PinMode::InputPullDown);
-        return console_.open(UartConfig{});
+        const Status st = aux_.open(UartConfig{});
+        return core::is_ok(st) ? console_.open(UartConfig{}) : st;
     }
     const char* name() const override { return "stm32f4-discovery"; }
 
@@ -178,7 +180,13 @@ public:
             default:                 return nullptr;
         }
     }
-    IUart* uart(UartId id) override { return id == UartId::Console ? &console_ : nullptr; }
+    IUart* uart(UartId id) override {
+        switch (id) {
+            case UartId::Console: return &console_;   // USART2
+            case UartId::Aux:     return &aux_;       // USART3
+            default:              return nullptr;
+        }
+    }
     II2c* i2c(I2cId id) override { return id == I2cId::Sensor ? &i2c_ : nullptr; }
     INvStorage* storage() override { return &flash_; }
     [[noreturn]] void reset() override {
@@ -191,6 +199,7 @@ private:
     Stm32Gpio alarm_led_{GPIOD, GPIO_PIN_14};
     Stm32Gpio button_{GPIOA, GPIO_PIN_0};
     Stm32Uart console_{&huart2};
+    Stm32Uart aux_{&huart3};
     Stm32I2c i2c_{&hi2c1};
     Stm32FlashStorage flash_;
 };

@@ -1,10 +1,11 @@
 # Embedded Platform – Kiến trúc phần mềm nhúng C++ đa nền tảng
 
-Bộ khung firmware C++17 phân lớp rõ ràng **HAL / OSAL / Service & Middleware / Application & Business**.
+Bộ khung firmware C++17 phân lớp rõ ràng **HAL / OSAL / Service / Middleware / Application & Business**.
 Mục tiêu:
 
 - **Chuyển nền tảng** (MCU, board, RTOS, Linux) mà **không sửa** code nghiệp vụ.
 - **Tùy biến nghiệp vụ** ở nhiều mức: chọn module, cấu hình lúc biên dịch, tham số lúc chạy.
+- **Đổi giao thức truyền thông linh hoạt** (CLI, Modbus RTU, MAVLink…) theo sản phẩm, lúc chạy, hoặc tự nhận dạng.
 - Phù hợp embedded: không exception, không RTTI, **không cấp phát heap sau khi khởi động**, tài nguyên tĩnh.
 
 ---
@@ -20,8 +21,12 @@ Mục tiêu:
 │  framework/ IModule · ModuleManager(Active Object) · StateMachine      │
 │             System (Composition Root) · SystemContext (DI)             │
 ├────────────────────────────────────────────────────────────────────────┤
-│ SERVICE & MIDDLEWARE (services/)                                       │
-│  EventBus · ParamStore(NV+CRC) · CommandService(CLI) · Logger          │
+│ MIDDLEWARE (middleware/)  ngăn xếp truyền thông                        │
+│  comm/   IByteStream · IProtocol · LinkManager · CliProtocol           │
+│  modbus/ ModbusRtuProtocol · bảng ánh xạ Map   (mavlink/ ... sau này)  │
+├────────────────────────────────────────────────────────────────────────┤
+│ SERVICE (services/)                                                    │
+│  EventBus · ParamStore(NV+CRC) · CommandService(bảng lệnh) · Logger    │
 │  LedService · Device drivers (Tmp102 : ITemperatureSensor)             │
 ├──────────────────────────────────┬─────────────────────────────────────┤
 │ OSAL (osal/)                     │ HAL (hal/)                          │
@@ -42,16 +47,17 @@ Mục tiêu:
 | **Utils** | Thuật toán & cấu trúc dữ liệu thuần: CRC, định dạng fixed-point, ring buffer | Phụ thuộc OS, phần cứng, nghiệp vụ | – (hàm/template thuần) |
 | **HAL** | Trừu tượng ngoại vi: GPIO, UART, I2C, NV storage; `IBoard` ánh xạ ID logic → phần cứng | Gọi OSAL, chứa logic nghiệp vụ, biết tới sản phẩm | **Runtime** (interface ảo) → mock được, nhiều instance |
 | **OSAL** | Thread, mutex, semaphore, queue, thời gian, vùng găng | Truy cập phần cứng | **Link-time** (chọn port khi build) → zero-overhead |
-| **Service & Middleware** | Dịch vụ dùng chung: event bus, tham số, CLI, log, LED, driver thiết bị | Chứa quy tắc nghiệp vụ của sản phẩm; gọi API vendor trực tiếp | Interface (`ITemperatureSensor`, `ILogSink`, `ICommandHandler`) |
+| **Service** | Dịch vụ dùng chung: event bus, tham số, bảng lệnh, log, LED, driver thiết bị | Chứa quy tắc nghiệp vụ của sản phẩm; gọi API vendor trực tiếp | Interface (`ITemperatureSensor`, `ILogSink`, `ICommandHandler`) |
+| **Middleware** | Truyền thông: kênh, giao thức (CLI, Modbus…), chọn/đổi giao thức lúc chạy | Biết tới module nghiệp vụ cụ thể (chỉ dùng Event/Param qua bảng ánh xạ) | **Runtime** (`IByteStream`, `IProtocol`) |
 | **Application – Framework** | Vòng đời module, định tuyến event, lập lịch tick, state machine, boot | Chứa nghiệp vụ cụ thể | – |
 | **Application – Business** | Quy tắc nghiệp vụ (đo, cảnh báo, điều khiển...) | Include `hal/*`, `osal_port_types.hpp`, header vendor; tự tạo thread | Plug-in qua `IModule` |
-| **Product** | Lắp ráp module + cấu hình mặc định cho từng sản phẩm | – | Chọn thư mục khi build |
+| **Product** | Lắp ráp module + kênh/giao thức + cấu hình mặc định cho từng sản phẩm | – | Chọn thư mục khi build |
 
 ### Quy tắc phụ thuộc (được CMake ép buộc)
 
 ```
 core ◄── utils ◄── osal ◄──┐
-              ◄── hal  ◄──┴── services ◄── app_framework ◄── modules ◄── product ◄── firmware(main)
+              ◄── hal  ◄──┴── services ◄── middleware(comm ◄ modbus) ◄── app_framework ◄── modules ◄── product ◄── firmware(main)
 ```
 
 Mỗi lớp chỉ `target_link_libraries` tới lớp ngay dưới → include sai lớp sẽ **lỗi biên dịch**.
@@ -62,7 +68,7 @@ Lớp dưới không bao giờ biết lớp trên; giao tiếp ngược lên ch�
 ## 2. Cấu trúc thư mục
 
 ```
-embedded-platform/
+EmbededFramework/
 ├── CMakeLists.txt              # EP_PLATFORM, EP_PRODUCT
 ├── cmake/platforms/            # linux_sim.cmake, stm32f4_freertos.cmake  (chọn port)
 ├── cmake/toolchains/           # arm-none-eabi.cmake
@@ -77,14 +83,18 @@ embedded-platform/
 ├── services/
 │   ├── include/services/       # event_bus, param_store, command_service, logger, led_service
 │   └── include/services/drivers/  # temperature_sensor (interface), tmp102 (driver)
+├── middleware/
+│   ├── comm/                   # byte_stream, protocol, link_manager, cli_protocol
+│   └── modbus/                 # modbus_map (bảng ánh xạ), modbus_rtu (slave)
 ├── app/
 │   ├── framework/include/app/  # module, module_manager, state_machine, system, product
 │   └── modules/                # module nghiệp vụ tái sử dụng + app_events.hpp, app_params.hpp
 ├── products/
-│   ├── thermo_pro/             # 3 module, latch, module riêng StatsReporter
-│   └── thermo_lite/            # 2 module, cấu hình nhỏ cho MCU ít RAM
+│   ├── thermo_pro/             # 3 module, latch, StatsReporter, CLI + Modbus (modbus_map.cpp)
+│   └── thermo_lite/            # 2 module, chỉ CLI, cấu hình nhỏ cho MCU ít RAM
 ├── platform/{linux,stm32f4_freertos}/main.cpp   # entry point theo nền tảng
-└── tests/                      # unit test host + mocks HAL
+├── tools/modbus_udp_client.py  # client Modbus RTU-over-UDP để thử bản mô phỏng
+└── tests/                      # unit test host + mocks HAL/stream
 ```
 
 ---
@@ -94,8 +104,9 @@ embedded-platform/
 ```
  [ISR] ──give_from_isr──► driver/HAL buffer
                                   │
- ┌── thread "cli" ──┐   ┌── thread "led" ──┐    ┌── service khác ──┐
- │ CommandService   │   │ LedService 50ms  │    │ ParamStore.set() │
+ ┌ thread kênh comm ┐   ┌── thread "led" ──┐    ┌── service khác ──┐
+ │ console/aux: CLI,│   │ LedService 50ms  │    │ ParamStore.set() │
+ │ Modbus... (RX)   │   │                  │    │                  │
  └───────┬──────────┘   └──────────────────┘    └───────┬──────────┘
          │ publish(Event)                               │ publish(kParamChanged)
          ▼                                              ▼
@@ -109,19 +120,20 @@ embedded-platform/
 ```
 
 - **Toàn bộ nghiệp vụ chạy trên 1 thread** (Active Object) → module **không cần mutex**, hành vi xác định, dễ test.
-- Service dùng thread riêng khi cần (CLI, LED); dữ liệu chia sẻ sang thread khác dùng `std::atomic` hoặc đi qua event.
-- Handler CLI chạy trên thread CLI ⇒ **không sửa trạng thái module trực tiếp**, mà publish event yêu cầu
-  (ví dụ `alarm ack` → `kAlarmAckRequest`).
+- Mỗi kênh truyền thông có một thread RX riêng; LED có thread riêng. Dữ liệu chia sẻ sang thread khác dùng `std::atomic` hoặc đi qua event.
+- Handler lệnh / giao thức chạy trên thread của kênh ⇒ **không sửa trạng thái module trực tiếp**, mà publish event yêu cầu
+  (ví dụ `alarm ack` hoặc coil Modbus 0 → `kAlarmAckRequest`).
 - Event là struct kích thước cố định, copy theo giá trị, payload `trivially_copyable` (kiểm tra bằng `static_assert`).
 
 ### Trình tự khởi động (`app::System::init`)
 
 1. `board.init()` → gắn console vào Logger
 2. Khởi tạo service: ParamStore, CommandService, LedService
-3. Bring-up thiết bị: driver gắn lên bus HAL (`Tmp102` ← `II2c`) → `Devices`
-4. `product::register_modules()` → `on_init()` từng module (đăng ký tham số, lệnh CLI)
-5. `params.load()` từ NV (CRC sai/không có → giữ mặc định)
-6. Start service → `on_start()` từng module (đọc tham số, khởi động FSM) → publish `kSystemStarted`
+3. `LinkManager::init()` (đăng ký lệnh `link`)
+4. Bring-up thiết bị: driver gắn lên bus HAL (`Tmp102` ← `II2c`) → `Devices`
+5. `product::setup()` → thêm module + khai báo kênh/giao thức; rồi `on_init()` từng module (đăng ký tham số, lệnh)
+6. `params.load()` từ NV, gồm cả lựa chọn giao thức `comm.<kênh>` (CRC sai/không có → giữ mặc định)
+7. Start service → `on_start()` từng module → `links.start()` (mỗi kênh bật giao thức đã chọn) → publish `kSystemStarted`
 
 ---
 
@@ -135,12 +147,90 @@ embedded-platform/
 | **Tham số runtime** | `ParamStore` + CLI `param set/save`, sự kiện `kParamChanged` | đổi `alarm.high` khi đang chạy, lưu Flash |
 | **Mở rộng hành vi** | Module mới / state mới trong `StateMachine` | thêm trạng thái `Maintenance` |
 | **Module riêng của sản phẩm** | Đặt trong `products/<p>/` | `products/thermo_pro/stats_reporter.hpp` |
+| **Giao thức truyền thông** | Kênh + giao thức trong `product::setup()`, tham số `comm.<kênh>` | xem mục 5 |
 
 ---
 
-## 5. Hướng dẫn mở rộng
+## 5. Truyền thông & đổi giao thức linh hoạt
 
-### 5.1 Thêm module nghiệp vụ
+Nguyên tắc: **nghiệp vụ chỉ nói chuyện bằng mô hình dữ liệu chuẩn** (Event miền + ParamStore).
+Mỗi giao thức chỉ là một *cách biểu diễn* khác của mô hình đó, nên thêm/đổi giao thức không đụng tới nghiệp vụ.
+
+```
+ Nghiệp vụ          TemperatureMonitor, AlarmController ...   (không include Modbus/MAVLink)
+                           │  Event miền, Param
+ ═════════════════ EventBus · ParamStore · CommandService ═════════════  ← hợp đồng ổn định
+                           │
+ ① IProtocol        CliProtocol | ModbusRtuProtocol(+Map) | MavlinkProtocol (tương lai)
+                           │  codec + phiên + ánh xạ Event/Param ↔ message
+ ② LinkManager      kênh "console", "aux"...: 1 stream + giao thức cho phép + tham số comm.<kênh>
+                           │
+ ③ IByteStream      UartStream | (UdpStream, UsbCdcStream ...)
+                           │
+ HAL                IUart (Console, Aux), ...
+```
+
+| Muốn đổi… | Chỉ thay | Không động tới |
+|---|---|---|
+| Giao thức (CLI → Modbus → MAVLink) | `IProtocol` ① | Nghiệp vụ, đường truyền |
+| Đường truyền (UART → RS485 → UDP) | `IByteStream` / HAL ③ | Giao thức, nghiệp vụ |
+| Thanh ghi/message nào ứng với dữ liệu nào | Bảng ánh xạ của sản phẩm | Giao thức, nghiệp vụ |
+
+### 5.1 Bốn mức chọn giao thức
+
+| Mức | Cách làm | Ví dụ trong repo |
+|---|---|---|
+| **Build** | Sản phẩm link thư viện giao thức nào thì chỉ giao thức đó có trong firmware | `thermo_pro` link `ep_proto_modbus`; `thermo_lite` không → không tốn Flash |
+| **Sản phẩm** | `product::setup()` khai báo kênh + danh sách giao thức được phép + mặc định | `console`: {modbus, cli} mặc định CLI; `aux`: {modbus, cli} mặc định Modbus |
+| **Runtime** | Tham số `comm.<kênh>` = `0` off, `1` auto, hoặc ID giao thức (`2` cli, `3` modbus, `4` mavlink); đổi bằng `link set`, `param set`, hoặc **qua chính giao thức** (holding register Modbus 6/7). `param save` để giữ sau khởi động lại | `link set aux cli` |
+| **Auto-detect** | `comm.<kênh> = 1`: kênh nghe dữ liệu đầu tiên, hỏi `probe()` của từng giao thức (bỏ qua rác ở đầu); im lặng 10 s thì nhận dạng lại | Cắm terminal → CLI; cắm Modbus master → Modbus |
+
+Giao thức được chọn là giao thức không có trên kênh (vd. `4` khi kênh không có MAVLink) → kênh giữ nguyên
+và tham số tự trả về giá trị cũ. Chuyển giao thức luôn diễn ra trên thread của kênh, an toàn kể cả khi lệnh
+chuyển được gửi tới **qua chính kênh đó**.
+
+### 5.2 Ánh xạ Modbus của `thermo_pro` (`products/thermo_pro/modbus_map.cpp`)
+
+| Loại | Địa chỉ | Dữ liệu chuẩn |
+|---|---|---|
+| Input register (FC04) | 0 | nhiệt độ 0.1 °C (`kTemperature`) |
+| | 1 | mức cảnh báo 0..3 (`kAlarmStateChanged`) |
+| Holding register (FC03/06/16) | 0..5 | `alarm.warn/high/hyst/latch`, `temp.period_ms/offset` (qua ParamStore: kiểm tra miền, phát `kParamChanged`) |
+| | 6, 7 | `comm.console`, `comm.aux` — đổi giao thức từ xa |
+| Coil (FC05) | 0 | xác nhận cảnh báo (`kAlarmAckRequest`) |
+| | 1 | lưu tham số xuống Flash |
+
+Đơn vị (unit id) = 1. Lỗi trả về exception chuẩn: 01 function, 02 địa chỉ, 03 giá trị (ngoài miền ParamStore), 04 thiết bị.
+Đóng khung theo độ dài suy ra từ function code + CRC, tự tái đồng bộ khi có rác, nên chạy được cả trên UART, RS485 lẫn RTU-over-UDP.
+
+### 5.3 Thử trên bản mô phỏng
+
+Cổng `aux` của board mô phỏng là UDP `127.0.0.1:15020` (đổi bằng `EP_SIM_AUX_PORT`):
+
+```bash
+./build/firmware
+```
+```bash
+tools/modbus_udp_client.py read-input 0 2        # nhiệt độ, mức cảnh báo
+```
+```bash
+tools/modbus_udp_client.py write 1 700           # alarm.high = 70.0 °C
+```
+```bash
+tools/modbus_udp_client.py write 7 2             # comm.aux = CLI: đổi giao thức từ xa
+```
+```bash
+tools/modbus_udp_client.py text "link set aux auto"   # giờ aux là CLI: gửi lệnh văn bản
+```
+```bash
+tools/modbus_udp_client.py coil 0 on             # auto: Modbus được tự nhận dạng, xác nhận cảnh báo
+```
+
+---
+
+## 6. Hướng dẫn mở rộng
+
+### 6.1 Thêm module nghiệp vụ
 
 ```cpp
 class PumpController final : public app::IModule {
@@ -164,52 +254,63 @@ private:
 
 1. Cấp dải ID trong `app/modules/app_params.hpp` (param) và `app_events.hpp` (event).
 2. Thêm file `.cpp` vào target `ep_modules` (hoặc giữ trong `products/<p>/` nếu chỉ một sản phẩm dùng).
-3. `modules.add(&pump)` trong `product.cpp`.
+3. `s.modules.add(&pump)` trong `product::setup()`.
 4. Viết unit test như `tests/test_alarm_controller.cpp` – đưa event vào, kiểm tra kết quả, không cần phần cứng.
 
-### 5.2 Thêm sản phẩm mới
+### 6.2 Thêm sản phẩm mới
 
 ```
 products/my_product/
-├── CMakeLists.txt              # add_library(ep_product ...) + link ep_modules
+├── CMakeLists.txt              # add_library(ep_product ...) + link ep_modules (+ ep_proto_* cần dùng)
 ├── config/product_config.hpp   # override EP_CFG_* (tùy chọn)
-└── product.cpp                 # product::name(), product::register_modules()
+└── product.cpp                 # product::name(), product::setup(): module + kênh/giao thức
 ```
 
 ```bash
 cmake -B build-my -DEP_PRODUCT=my_product
 ```
 
-### 5.3 Port sang board mới (cùng OS)
+### 6.3 Port sang board mới (cùng OS)
 
 1. Tạo `hal/ports/<board>/` hiện thực `IGpio/IUart/II2c/INvStorage` bằng SDK của chip.
 2. Hiện thực `IBoard` ánh xạ `GpioId::StatusLed` … sang chân vật lý, và `hal::board()`.
 3. Tạo `cmake/platforms/<board>_<os>.cmake` đặt `EP_HAL_PORT=<board>`.
    ⇒ Services, App, Product **không đổi một dòng**.
 
-### 5.4 Port sang hệ điều hành mới (Zephyr, ThreadX, CMSIS-RTOS2, ESP-IDF…)
+### 6.4 Port sang hệ điều hành mới (Zephyr, ThreadX, CMSIS-RTOS2, ESP-IDF…)
 
 1. Tạo `osal/ports/<os>/include/osal_port_types.hpp` – khai báo `MutexHandle`, `SemaphoreHandle`, `ThreadHandle`.
 2. Tạo `osal/ports/<os>/osal_<os>.cpp` – hiện thực các hàm trong `osal/include/osal/*.hpp`
    (tham khảo `osal_freertos.cpp`, ~100 dòng).
 3. Đặt `EP_OSAL_PORT=<os>` trong file platform. `Queue<T,N>` tự động hoạt động vì được viết trên Mutex/Semaphore.
 
-### 5.5 Thêm tiện ích dùng chung
+### 6.5 Thêm tiện ích dùng chung
 
 Thuật toán / cấu trúc dữ liệu **không phụ thuộc OS, phần cứng hay nghiệp vụ** (checksum, mã hóa
 COBS/base64, bộ lọc số, PID, bitfield...) đặt trong `utils/` (namespace `utils`), kèm test trong
 `tests/test_utils.cpp`. Mọi lớp từ OSAL/HAL trở lên đều dùng được.
 Thứ gì cần mutex/thread (vd. `osal::Queue`) thuộc OSAL; thứ gì gắn với event/tham số thuộc Services.
 
-### 5.6 Thêm loại thiết bị
+### 6.6 Thêm loại thiết bị
 
 Định nghĩa interface thiết bị trong `services/include/services/drivers/` (vd. `IPressureSensor`), driver cụ thể
 dùng interface HAL, thêm con trỏ vào `app::Devices`, khởi tạo trong `System::bring_up_devices()`.
 Nghiệp vụ chỉ phụ thuộc interface → thay chip cảm biến không ảnh hưởng nghiệp vụ.
 
+### 6.7 Thêm giao thức mới (vd. MAVLink, giao thức riêng)
+
+1. Tạo `middleware/<proto>/` với target `ep_proto_<proto>` link `ep_comm`; thư viện bên thứ ba (vd. header
+   MAVLink sinh từ XML) đặt ở `third_party/` và **chỉ** target này được include.
+2. Hiện thực `comm::IProtocol`: `id()` (giá trị ổn định, vd. `proto::kMavlink` hoặc `proto::kUserBase + n`),
+   `attach/detach`, `on_rx` (parse), `poll` (heartbeat/timeout), `probe` (nhận dạng chặt chẽ, có CRC).
+   Cần đẩy dữ liệu chủ động thì kế thừa thêm `svc::IEventListener` và ghi qua `io.write()` (đã thread-safe).
+3. Đặt bảng ánh xạ Event/Param ↔ message ở sản phẩm (như `modbus_map.cpp`), không viết vào nghiệp vụ.
+4. Trong `product::setup()`: tạo instance (mỗi kênh một instance) và thêm vào danh sách của kênh.
+5. Test bằng `mock::ScriptedStream` + khung mẫu (golden frame), như `tests/test_modbus.cpp`, `tests/test_link_manager.cpp`.
+
 ---
 
-## 6. Build & chạy
+## 7. Build & chạy
 
 ### Linux (mô phỏng phần cứng)
 
@@ -227,7 +328,8 @@ ctest --test-dir build --output-on-failure
 ```
 
 Phần cứng mô phỏng: cảm biến TMP102 cho nhiệt độ hình sin 15–85 °C (chu kỳ 40 s), hoặc cố định bằng
-`EP_SIM_TEMP=72.5`; Flash mô phỏng là file `ep_nvram.bin` (đổi bằng `EP_SIM_NVRAM`).
+`EP_SIM_TEMP=72.5`; Flash mô phỏng là file `ep_nvram.bin` (đổi bằng `EP_SIM_NVRAM`); cổng `aux` là
+UDP `127.0.0.1:15020` (đổi bằng `EP_SIM_AUX_PORT`).
 
 Lệnh CLI:
 
@@ -237,6 +339,7 @@ sys info | modules | log <0-5> | reboot | quit
 param list | get <n> | set <n> <v> | save | reset
 temp                         nhiệt độ hiện tại, thống kê
 alarm status | ack           trạng thái cảnh báo / xác nhận
+link list | set <kênh> <off|auto|cli|modbus>   kênh truyền thông & đổi giao thức
 ```
 
 ### STM32F407 + FreeRTOS
@@ -252,7 +355,7 @@ Port STM32 và FreeRTOS là **mẫu tham khảo** – chưa được biên dịc
 
 ---
 
-## 7. Quy ước code cho môi trường nhúng
+## 8. Quy ước code cho môi trường nhúng
 
 - C++17, `-fno-exceptions -fno-rtti`; lỗi trả về `core::Status`.
 - Không `new`/`malloc` sau khi khởi động: dùng `std::array`, `static` object, stack cấp phát tĩnh cho thread.
@@ -260,8 +363,9 @@ Port STM32 và FreeRTOS là **mẫu tham khảo** – chưa được biên dịc
 - Khởi tạo hai pha (`init()` sau constructor) cho object phụ thuộc phần cứng.
 - API gọi được từ ISR chỉ có hậu tố `_from_isr`. Logger không được gọi trong ISR.
 - Đơn vị cố định trong nghiệp vụ (0.1 °C, ms) dùng số nguyên — tránh float trên MCU không có FPU.
+- Module nghiệp vụ không include header của giao thức (Modbus, MAVLink…); dữ liệu ra/vào chỉ qua Event/Param.
 
-## 8. Design pattern áp dụng
+## 9. Design pattern áp dụng
 
 | Pattern | Ở đâu |
 |---|---|
@@ -275,3 +379,5 @@ Port STM32 và FreeRTOS là **mẫu tham khảo** – chưa được biên dịc
 | State Machine (state = method) | `app::StateMachine`, `AlarmController` |
 | Plug-in / Strategy | `IModule`, `ITemperatureSensor`, `ILogSink`, `ICommandHandler` |
 | Command | `CommandService` |
+| Adapter / Anti-corruption layer | `IProtocol` + bảng ánh xạ (`modbus::Map`) |
+| Strategy chọn lúc chạy | `LinkManager` (tham số `comm.<kênh>`, auto-detect qua `probe()`) |

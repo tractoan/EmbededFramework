@@ -36,6 +36,12 @@
 #ifndef EP_CFG_CLI_ECHO
 #define EP_CFG_CLI_ECHO 1
 #endif
+#ifndef EP_CFG_COMM_MAX_CHANNELS
+#define EP_CFG_COMM_MAX_CHANNELS 4
+#endif
+#ifndef EP_CFG_COMM_MAX_PROTOCOLS
+#define EP_CFG_COMM_MAX_PROTOCOLS 4
+#endif
 #ifndef EP_CFG_LOG_LINE_MAX
 #define EP_CFG_LOG_LINE_MAX 160
 #endif
@@ -57,6 +63,8 @@ inline constexpr std::size_t kMaxCommands         = EP_CFG_MAX_COMMANDS;
 inline constexpr std::size_t kCliLineMax          = EP_CFG_CLI_LINE_MAX;
 inline constexpr std::size_t kCliMaxArgs          = EP_CFG_CLI_MAX_ARGS;
 inline constexpr bool        kCliEcho             = EP_CFG_CLI_ECHO != 0;
+inline constexpr std::size_t kCommMaxChannels     = EP_CFG_COMM_MAX_CHANNELS;
+inline constexpr std::size_t kCommMaxProtocols    = EP_CFG_COMM_MAX_PROTOCOLS;
 inline constexpr std::size_t kLogLineMax          = EP_CFG_LOG_LINE_MAX;
 inline constexpr std::size_t kLogSinks            = EP_CFG_LOG_SINKS;
 }  // namespace core::cfg

@@ -11,7 +11,7 @@ namespace {
 constexpr const char* kTag = "system";
 }
 
-core::Status System::init(const char* product_name, ProductRegistrar registrar) {
+core::Status System::init(const char* product_name, ProductSetupFn setup) {
     product_ = product_name;
 
     // 1. Phần cứng + log sớm nhất có thể
@@ -22,26 +22,34 @@ core::Status System::init(const char* product_name, ProductRegistrar registrar) 
     svc::Logger::instance().add_sink(&log_sink_);
     LOGI(kTag, "boot: product='%s' board='%s'", product_, board_.name());
 
-    // 2. Services & middleware
+    // 2. Services
     params_.init(board_.storage(), &bus_);
-    cli_.init(console, svc::CommandService::Config{});
     param_cli_.init(&params_);
-    cli_.register_command({"param", "list | get <n> | set <n> <v> | save | reset", &param_cli_});
-    cli_.register_command({"sys", "info | modules | log <0-5> | reboot | quit", &sys_cli_});
+    commands_.register_command({"param", "list | get <n> | set <n> <v> | save | reset", &param_cli_});
+    commands_.register_command({"sys", "info | modules | log <0-5> | reboot | quit", &sys_cli_});
     leds_.bind(svc::LedId::Status, board_.gpio(hal::GpioId::StatusLed));
     leds_.bind(svc::LedId::Alarm, board_.gpio(hal::GpioId::AlarmLed));
 
-    // 3. Thiết bị (driver gắn lên bus HAL)
+    // 3. Middleware truyền thông (kênh & giao thức do sản phẩm khai báo ở bước 5)
+    console_stream_.attach(console);
+    st = links_.init(comm_services_);
+    if (!core::is_ok(st)) return st;
+
+    // 4. Thiết bị (driver gắn lên bus HAL)
     bring_up_devices();
 
-    // 4. Nghiệp vụ theo sản phẩm
-    if (registrar == nullptr) return core::Status::InvalidArg;
-    st = registrar(modules_);
-    if (!core::is_ok(st)) return st;
+    // 5. Sản phẩm: module nghiệp vụ + kênh truyền thông
+    if (setup == nullptr) return core::Status::InvalidArg;
+    ProductSetup product_setup{modules_, links_, board_, console_stream_};
+    st = setup(product_setup);
+    if (!core::is_ok(st)) {
+        LOGE(kTag, "product setup failed: %s", core::to_string(st));
+        return st;
+    }
     st = modules_.init_all(ctx_);
     if (!core::is_ok(st)) return st;
 
-    // 5. Nạp cấu hình đã lưu (sau khi mọi module đã đăng ký tham số)
+    // 6. Nạp cấu hình đã lưu (gồm cả lựa chọn giao thức của từng kênh) (sau khi mọi module đã đăng ký tham số)
     st = params_.load();
     if (core::is_ok(st)) {
         LOGI(kTag, "parameters loaded from NV (%u)", static_cast<unsigned>(params_.count()));
@@ -49,12 +57,13 @@ core::Status System::init(const char* product_name, ProductRegistrar registrar) 
         LOGW(kTag, "NV params unavailable (%s) -> defaults", core::to_string(st));
     }
 
-    // 6. Chạy
+    // 7. Chạy
     leds_.start();
     leds_.set(svc::LedId::Status, svc::LedPattern::Heartbeat);
     st = modules_.start();
     if (!core::is_ok(st)) return st;
-    if (!core::is_ok(cli_.start())) LOGW(kTag, "CLI not available");
+    st = links_.start();
+    if (!core::is_ok(st)) return st;
 
     bus_.publish(svc::Event::make(svc::evt::kSystemStarted));
     LOGI(kTag, "system started");
@@ -73,7 +82,7 @@ void System::bring_up_devices() {
 void System::shutdown() {
     LOGI(kTag, "shutting down...");
     bus_.publish(svc::Event::make(svc::evt::kSystemShutdown));
-    cli_.stop();
+    links_.stop();
     modules_.stop();
     leds_.set(svc::LedId::Status, svc::LedPattern::Off);
     leds_.set(svc::LedId::Alarm, svc::LedPattern::Off);

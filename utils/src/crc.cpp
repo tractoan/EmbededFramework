@@ -25,4 +25,15 @@ std::uint16_t crc16_ccitt(const void* data, std::size_t len, std::uint16_t crc) 
     return crc;
 }
 
+std::uint16_t crc16_modbus(const void* data, std::size_t len, std::uint16_t crc) {
+    const auto* p = static_cast<const std::uint8_t*>(data);
+    while (len--) {
+        crc = static_cast<std::uint16_t>(crc ^ *p++);
+        for (int k = 0; k < 8; ++k) {
+            crc = (crc & 1u) ? static_cast<std::uint16_t>((crc >> 1) ^ 0xA001u) : static_cast<std::uint16_t>(crc >> 1);
+        }
+    }
+    return crc;
+}
+
 }  // namespace utils

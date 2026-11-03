@@ -14,6 +14,7 @@ extern "C" {
 void SystemClock_Config(void);       // platform/stm32f4_freertos/clock_config.c
 void MX_GPIO_Init(void);             // CubeMX: gpio.c
 void MX_USART2_UART_Init(void);      // CubeMX: usart.c
+void MX_USART3_UART_Init(void);      // CubeMX: usart.c (Aux / RS485)
 void MX_I2C1_Init(void);             // CubeMX: i2c.c
 }
 
@@ -24,7 +25,7 @@ osal::Thread g_init_thread;
 
 void init_task(void*) {
     static app::System system(hal::board());
-    if (!core::is_ok(system.init(product::name(), &product::register_modules))) {
+    if (!core::is_ok(system.init(product::name(), &product::setup))) {
         hal::board().reset();
     }
     for (;;) osal::sleep_ms(1000);   // có thể dùng làm watchdog/idle supervisor
@@ -37,6 +38,7 @@ int main() {
     SystemClock_Config();
     MX_GPIO_Init();
     MX_USART2_UART_Init();
+    MX_USART3_UART_Init();
     MX_I2C1_Init();
 
     g_init_thread.start(osal::ThreadConfig{"init", osal::Priority::High, sizeof(g_init_stack), g_init_stack},

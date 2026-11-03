@@ -2,6 +2,8 @@
 #include <atomic>
 
 #include "app/module_manager.hpp"
+#include "app/product.hpp"
+#include "comm/link_manager.hpp"
 #include "hal/board.hpp"
 #include "services/command_service.hpp"
 #include "services/drivers/tmp102.hpp"
@@ -10,17 +12,18 @@
 
 namespace app {
 
-using ProductRegistrar = core::Status (*)(ModuleManager& modules);
+using ProductSetupFn = core::Status (*)(ProductSetup& setup);
 
-// Composition Root: nơi DUY NHẤT "lắp ráp" HAL + OSAL + Services + Modules.
+// Composition Root: nơi DUY NHẤT "lắp ráp" HAL + OSAL + Services + Middleware + Modules.
 // Trình tự boot:
-//   board.init -> logger -> services -> devices -> product modules (on_init)
-//   -> params.load -> services.start -> modules.start (on_start) -> kSystemStarted
+//   board.init -> logger -> services -> link manager -> devices
+//   -> product::setup (module + kênh/giao thức) -> modules.on_init
+//   -> params.load -> services.start -> modules.on_start -> links.start -> kSystemStarted
 class System : core::NonCopyable {
 public:
     explicit System(hal::IBoard& board) : board_(board), sys_cli_(*this) {}
 
-    core::Status init(const char* product_name, ProductRegistrar registrar);
+    core::Status init(const char* product_name, ProductSetupFn setup);
     void shutdown();
 
     void request_shutdown() { shutdown_req_ = true; }
@@ -43,13 +46,16 @@ private:
     svc::UartLogSink log_sink_;
     svc::EventBus bus_;
     svc::ParamStore params_;
-    svc::CommandService cli_;
+    svc::CommandService commands_;
     svc::ParamCli param_cli_;
     svc::LedService leds_;
     svc::Tmp102 tmp102_;
     Devices devices_;
     ModuleManager modules_;
-    SystemContext ctx_{bus_, params_, cli_, leds_, devices_};
+    comm::UartStream console_stream_;
+    comm::Services comm_services_{bus_, params_, commands_};
+    comm::LinkManager links_;
+    SystemContext ctx_{bus_, params_, commands_, leds_, devices_};
     SysCli sys_cli_;
     const char* product_ = "";
     std::atomic<bool> shutdown_req_{false};

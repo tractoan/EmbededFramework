@@ -3,7 +3,7 @@ add_library(ep_app_framework STATIC
   framework/src/module_manager.cpp
   framework/src/system.cpp)
 target_include_directories(ep_app_framework PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/framework/include)
-target_link_libraries(ep_app_framework PUBLIC ep_services)
+target_link_libraries(ep_app_framework PUBLIC ep_services ep_comm)
 
 # Business modules: thư viện module nghiệp vụ tái sử dụng giữa các sản phẩm.
 add_library(ep_modules STATIC

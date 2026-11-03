@@ -13,4 +13,7 @@ std::uint32_t crc32(const void* data, std::size_t len, std::uint32_t crc = 0);
 // Nối tiếp: crc = crc16_ccitt(b, n2, crc16_ccitt(a, n1)).
 std::uint16_t crc16_ccitt(const void* data, std::size_t len, std::uint16_t crc = 0xFFFF);
 
+// CRC-16/MODBUS (poly 0xA001 reflected, init 0xFFFF) – truyền byte thấp trước.
+std::uint16_t crc16_modbus(const void* data, std::size_t len, std::uint16_t crc = 0xFFFF);
+
 }  // namespace utils

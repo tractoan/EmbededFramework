@@ -21,7 +21,7 @@ int main(int argc, char** argv) {
     std::signal(SIGTERM, on_signal);
 
     static app::System system(hal::board());
-    if (!core::is_ok(system.init(product::name(), &product::register_modules))) return EXIT_FAILURE;
+    if (!core::is_ok(system.init(product::name(), &product::setup))) return EXIT_FAILURE;
 
     const std::uint64_t deadline = run_for_s ? osal::now_ms() + run_for_s * 1000ull : 0;
     while (!g_stop && !system.shutdown_requested() && (deadline == 0 || osal::now_ms() < deadline)) {

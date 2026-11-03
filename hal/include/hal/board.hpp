@@ -11,7 +11,7 @@ namespace hal {
 // ID LOGIC của tài nguyên phần cứng. Lớp trên chỉ biết ID logic;
 // mỗi board port tự ánh xạ sang chân/peripheral vật lý.
 enum class GpioId : std::uint8_t { StatusLed, AlarmLed, UserButton, Count };
-enum class UartId : std::uint8_t { Console, Count };
+enum class UartId : std::uint8_t { Console, Aux, Count };   // Aux: cổng thứ 2 (RS485, telemetry...)
 enum class I2cId : std::uint8_t { Sensor, Count };
 
 // Board Support: điểm truy cập duy nhất tới phần cứng (Abstract Factory).

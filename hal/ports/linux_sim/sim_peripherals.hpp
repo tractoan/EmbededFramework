@@ -34,6 +34,29 @@ private:
     bool eof_ = false;
 };
 
+// "UART" thứ hai mô phỏng bằng UDP (127.0.0.1:15020, đổi bằng env EP_SIM_AUX_PORT).
+// Mỗi datagram nhận được là một khối byte; phản hồi gửi về địa chỉ gửi gần nhất.
+// Dùng để thử giao thức nhị phân (Modbus RTU-over-UDP...) bằng công cụ trên PC.
+class SimUdpUart final : public IUart {
+public:
+    explicit SimUdpUart(std::uint16_t default_port) : port_(default_port) {}
+    ~SimUdpUart() override { close(); }
+    core::Status open(const UartConfig& cfg) override;
+    void close() override;
+    std::size_t write(const std::uint8_t* data, std::size_t len, std::uint32_t timeout_ms) override;
+    std::size_t read(std::uint8_t* data, std::size_t len, std::uint32_t timeout_ms) override;
+    std::uint16_t port() const { return port_; }
+
+private:
+    int fd_ = -1;
+    std::uint16_t port_;
+    std::uint8_t peer_[16]{};   // sockaddr_in (giữ header không phụ thuộc socket API)
+    bool has_peer_ = false;
+    std::uint8_t rx_[512]{};
+    std::size_t rx_len_ = 0;
+    std::size_t rx_pos_ = 0;
+};
+
 // Bus I2C có 1 thiết bị mô phỏng: cảm biến nhiệt TMP102 @0x48.
 // Nhiệt độ dao động hình sin 15..85°C chu kỳ 40s, hoặc cố định qua env EP_SIM_TEMP.
 class SimI2c final : public II2c {
