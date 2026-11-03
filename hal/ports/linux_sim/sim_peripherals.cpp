@@ -63,7 +63,8 @@ std::size_t SimConsoleUart::read(std::uint8_t* data, std::size_t len, std::uint3
 static_assert(sizeof(sockaddr_in) <= 16, "peer storage too small");
 
 Status SimUdpUart::open(const UartConfig& /*cfg*/) {
-    if (const char* env = std::getenv("EP_SIM_AUX_PORT")) port_ = static_cast<std::uint16_t>(std::atoi(env));
+    if (fd_ >= 0) return Status::Ok;   // mở lại (vd. đổi baudrate): giữ socket
+    if (const char* env = env_port_ ? std::getenv(env_port_) : nullptr) port_ = static_cast<std::uint16_t>(std::atoi(env));
     fd_ = ::socket(AF_INET, SOCK_DGRAM, 0);
     if (fd_ < 0) return Status::Error;
     sockaddr_in addr{};
@@ -83,8 +84,13 @@ void SimUdpUart::close() {
 }
 
 std::size_t SimUdpUart::write(const std::uint8_t* data, std::size_t len, std::uint32_t /*timeout_ms*/) {
-    if (fd_ < 0 || !has_peer_) return 0;   // chưa có ai kết nối: bỏ dữ liệu
-    const ssize_t n = ::sendto(fd_, data, len, 0, reinterpret_cast<const sockaddr*>(peer_), sizeof(sockaddr_in));
+    std::uint8_t peer[sizeof(peer_)];
+    {
+        std::lock_guard<std::mutex> g(peer_mtx_);
+        if (fd_ < 0 || !has_peer_) return 0;   // chưa có ai kết nối: bỏ dữ liệu
+        std::memcpy(peer, peer_, sizeof(peer));
+    }
+    const ssize_t n = ::sendto(fd_, data, len, 0, reinterpret_cast<const sockaddr*>(peer), sizeof(sockaddr_in));
     return n > 0 ? static_cast<std::size_t>(n) : 0;
 }
 
@@ -97,10 +103,15 @@ std::size_t SimUdpUart::read(std::uint8_t* data, std::size_t len, std::uint32_t 
         pollfd pfd{fd_, POLLIN, 0};
         const int wait = timeout_ms > 60000u ? 60000 : static_cast<int>(timeout_ms);
         if (::poll(&pfd, 1, wait) <= 0) return 0;
+        std::uint8_t from[sizeof(peer_)]{};
         socklen_t plen = sizeof(sockaddr_in);
-        const ssize_t n = ::recvfrom(fd_, rx_, sizeof(rx_), 0, reinterpret_cast<sockaddr*>(peer_), &plen);
+        const ssize_t n = ::recvfrom(fd_, rx_, sizeof(rx_), 0, reinterpret_cast<sockaddr*>(from), &plen);
         if (n <= 0) return 0;
-        has_peer_ = true;
+        {
+            std::lock_guard<std::mutex> g(peer_mtx_);
+            std::memcpy(peer_, from, sizeof(peer_));
+            has_peer_ = true;
+        }
         rx_len_   = static_cast<std::size_t>(n);
         rx_pos_   = 0;
     }

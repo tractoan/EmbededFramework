@@ -1,0 +1,29 @@
+# Ánh xạ phần cứng cho firmware hw_bringup (platform linux_cpu). Dùng: EP_BOARD_CONF=/etc/ep_board.conf
+# Ghi đè bảng mặc định trong hal/ports/linux_cpu/board_config.hpp; biến môi trường EP_SERIAL3=... ưu tiên hơn file.
+# "none" = không có trên bo mạch.
+
+# Serial (chỉ số logic 0..11). serial0 = phần mềm giao diện (MAVLink), serial1 = máy thu GNSS.
+serial0=/dev/ttyS0
+serial1=/dev/ttyS1
+serial2=/dev/ttyXR0
+serial3=/dev/ttyXR1
+serial4=/dev/ttyXR2:rs485          # RS485, giắc loopback 4 dây
+serial5=/dev/ttyXR3:rs485-echo     # RS485 2 dây: nhận lại chính dữ liệu phát
+serial6=/dev/ttyXR4
+serial7=/dev/ttyXR5
+serial8=/dev/ttyXR6
+serial9=/dev/ttyXR7
+serial10=/dev/ttyUSB0
+serial11=/dev/ttyUSB1
+
+# Digital input / output: gpiochipN:line[:low]
+di0=gpiochip2:0
+di1=gpiochip2:1:low
+do0=gpiochip3:0
+do1=gpiochip3:1
+
+# SDLC/HDLC cho IMU
+hdlc0=synclink:/dev/ttySLG0
+hdlc1=packet:hdlc0
+
+nvram=/var/lib/ep_bringup/nvram.bin

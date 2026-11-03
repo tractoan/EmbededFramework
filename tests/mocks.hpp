@@ -1,6 +1,8 @@
 #pragma once
 // Mock HAL / device: cho phép test nghiệp vụ & service hoàn toàn không cần phần cứng.
 #include <array>
+#include <condition_variable>
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <deque>
@@ -13,6 +15,7 @@
 #include "utils/crc.hpp"
 
 #include "hal/gpio.hpp"
+#include "hal/uart.hpp"
 #include "hal/storage.hpp"
 #include "services/drivers/temperature_sensor.hpp"
 #include "services/event.hpp"
@@ -122,6 +125,61 @@ private:
     mutable std::mutex m_;
     std::deque<std::uint8_t> rx_;
     std::vector<std::uint8_t> tx_;
+};
+
+// UART có giắc loopback (echo) / không nối gì / không mở được.
+class Uart final : public hal::IUart {
+public:
+    enum class Mode { Loop, Silent, OpenFails, Corrupt };
+    explicit Uart(Mode m = Mode::Loop) : mode(m) {}
+    core::Status open(const hal::UartConfig& cfg) override {
+        ++opens;
+        baud = cfg.baudrate;
+        return mode == Mode::OpenFails ? core::Status::NotFound : core::Status::Ok;
+    }
+    void close() override {}
+    std::size_t write(const std::uint8_t* d, std::size_t n, std::uint32_t) override {
+        {
+            std::lock_guard<std::mutex> g(m_);
+            written.insert(written.end(), d, d + n);
+            if (mode == Mode::Loop || mode == Mode::Corrupt) {
+                for (std::size_t i = 0; i < n; ++i) rx_.push_back(mode == Mode::Corrupt && i == 5 ? d[i] ^ 1 : d[i]);
+            }
+        }
+        cv_.notify_all();
+        return n;
+    }
+    std::size_t read(std::uint8_t* d, std::size_t n, std::uint32_t timeout_ms) override {
+        std::unique_lock<std::mutex> lk(m_);
+        cv_.wait_for(lk, std::chrono::milliseconds(timeout_ms), [&] { return !rx_.empty(); });
+        std::size_t k = 0;
+        while (k < n && !rx_.empty()) {
+            d[k++] = rx_.front();
+            rx_.pop_front();
+        }
+        return k;
+    }
+    void inject(const std::string& text) {   // dữ liệu từ thiết bị ngoài (vd. máy thu GNSS)
+        {
+            std::lock_guard<std::mutex> g(m_);
+            rx_.insert(rx_.end(), text.begin(), text.end());
+        }
+        cv_.notify_all();
+    }
+    std::vector<std::uint8_t> written_bytes() {
+        std::lock_guard<std::mutex> g(m_);
+        return written;
+    }
+
+    Mode mode;
+    std::atomic<int> opens{0};
+    std::atomic<std::uint32_t> baud{0};
+
+private:
+    std::mutex m_;
+    std::condition_variable cv_;
+    std::deque<std::uint8_t> rx_;
+    std::vector<std::uint8_t> written;
 };
 
 // Chờ điều kiện (tối đa timeout) – cho test có thread.

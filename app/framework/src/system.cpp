@@ -86,8 +86,8 @@ void System::shutdown() {
     modules_.stop();
     leds_.set(svc::LedId::Status, svc::LedPattern::Off);
     leds_.set(svc::LedId::Alarm, svc::LedPattern::Off);
+    leds_.stop();                 // dừng thread LED trước, rồi áp trạng thái Off trên thread này
     leds_.tick(osal::now_ms());
-    leds_.stop();
     LOGI(kTag, "halted");
 }
 

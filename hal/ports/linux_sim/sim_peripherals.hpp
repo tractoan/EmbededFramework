@@ -2,6 +2,7 @@
 // Peripheral mô phỏng trên Linux: cho phép phát triển & test nghiệp vụ không cần phần cứng.
 #include <atomic>
 #include <chrono>
+#include <mutex>
 #include <string>
 
 #include "hal/board.hpp"
@@ -39,7 +40,9 @@ private:
 // Dùng để thử giao thức nhị phân (Modbus RTU-over-UDP...) bằng công cụ trên PC.
 class SimUdpUart final : public IUart {
 public:
-    explicit SimUdpUart(std::uint16_t default_port) : port_(default_port) {}
+    // env_port: biến môi trường cho phép đổi cổng (nullptr = không đổi được).
+    explicit SimUdpUart(std::uint16_t default_port, const char* env_port = "EP_SIM_AUX_PORT")
+        : env_port_(env_port), port_(default_port) {}
     ~SimUdpUart() override { close(); }
     core::Status open(const UartConfig& cfg) override;
     void close() override;
@@ -48,8 +51,10 @@ public:
     std::uint16_t port() const { return port_; }
 
 private:
+    const char* env_port_;
     int fd_ = -1;
     std::uint16_t port_;
+    std::mutex peer_mtx_;       // peer ghi bởi thread đọc, dùng bởi mọi thread ghi
     std::uint8_t peer_[16]{};   // sockaddr_in (giữ header không phụ thuộc socket API)
     bool has_peer_ = false;
     std::uint8_t rx_[512]{};

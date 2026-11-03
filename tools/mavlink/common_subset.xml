@@ -1,0 +1,82 @@
+<?xml version="1.0"?>
+<!--
+  Tập con của common.xml (MAVLink chuẩn) mà firmware hw_bringup dùng, để công cụ Python chạy được
+  không cần cài pymavlink. Định nghĩa trường giữ NGUYÊN thứ tự như common.xml (ảnh hưởng CRC_EXTRA).
+  Khi sinh mã cho phần mềm giao diện bằng mavgen, dùng bringup.xml (đã include common.xml đầy đủ).
+-->
+<mavlink>
+  <messages>
+    <message id="0" name="HEARTBEAT">
+      <field type="uint8_t" name="type"/>
+      <field type="uint8_t" name="autopilot"/>
+      <field type="uint8_t" name="base_mode"/>
+      <field type="uint32_t" name="custom_mode"/>
+      <field type="uint8_t" name="system_status"/>
+      <field type="uint8_t_mavlink_version" name="mavlink_version"/>
+    </message>
+    <message id="20" name="PARAM_REQUEST_READ">
+      <field type="uint8_t" name="target_system"/>
+      <field type="uint8_t" name="target_component"/>
+      <field type="char[16]" name="param_id"/>
+      <field type="int16_t" name="param_index"/>
+    </message>
+    <message id="21" name="PARAM_REQUEST_LIST">
+      <field type="uint8_t" name="target_system"/>
+      <field type="uint8_t" name="target_component"/>
+    </message>
+    <message id="22" name="PARAM_VALUE">
+      <field type="char[16]" name="param_id"/>
+      <field type="float" name="param_value"/>
+      <field type="uint8_t" name="param_type"/>
+      <field type="uint16_t" name="param_count"/>
+      <field type="uint16_t" name="param_index"/>
+    </message>
+    <message id="23" name="PARAM_SET">
+      <field type="uint8_t" name="target_system"/>
+      <field type="uint8_t" name="target_component"/>
+      <field type="char[16]" name="param_id"/>
+      <field type="float" name="param_value"/>
+      <field type="uint8_t" name="param_type"/>
+    </message>
+    <message id="76" name="COMMAND_LONG">
+      <field type="uint8_t" name="target_system"/>
+      <field type="uint8_t" name="target_component"/>
+      <field type="uint16_t" name="command"/>
+      <field type="uint8_t" name="confirmation"/>
+      <field type="float" name="param1"/>
+      <field type="float" name="param2"/>
+      <field type="float" name="param3"/>
+      <field type="float" name="param4"/>
+      <field type="float" name="param5"/>
+      <field type="float" name="param6"/>
+      <field type="float" name="param7"/>
+    </message>
+    <message id="77" name="COMMAND_ACK">
+      <field type="uint16_t" name="command"/>
+      <field type="uint8_t" name="result"/>
+      <extensions/>
+      <field type="uint8_t" name="progress"/>
+      <field type="int32_t" name="result_param2"/>
+      <field type="uint8_t" name="target_system"/>
+      <field type="uint8_t" name="target_component"/>
+    </message>
+    <message id="126" name="SERIAL_CONTROL">
+      <field type="uint8_t" name="device"/>
+      <field type="uint8_t" name="flags"/>
+      <field type="uint16_t" name="timeout"/>
+      <field type="uint32_t" name="baudrate"/>
+      <field type="uint8_t" name="count"/>
+      <field type="uint8_t[70]" name="data"/>
+      <extensions/>
+      <field type="uint8_t" name="target_system"/>
+      <field type="uint8_t" name="target_component"/>
+    </message>
+    <message id="253" name="STATUSTEXT">
+      <field type="uint8_t" name="severity"/>
+      <field type="char[50]" name="text"/>
+      <extensions/>
+      <field type="uint16_t" name="id"/>
+      <field type="uint8_t" name="chunk_seq"/>
+    </message>
+  </messages>
+</mavlink>

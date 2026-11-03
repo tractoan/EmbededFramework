@@ -1,0 +1,22 @@
+# systemd unit: chạy firmware bring-up khi khởi động, tự khởi động lại khi thoát ("sys reboot").
+#   sudo install -m755 build-cpu/firmware /usr/local/bin/ep_bringup
+#   sudo install -m644 products/hw_bringup/deploy/ep_board.conf.example /etc/ep_board.conf
+#   sudo install -m644 products/hw_bringup/deploy/ep-bringup.service /etc/systemd/system/
+#   sudo systemctl enable --now ep-bringup
+[Unit]
+Description=Hardware bring-up firmware (MAVLink)
+After=multi-user.target
+
+[Service]
+Environment=EP_BOARD_CONF=/etc/ep_board.conf
+StateDirectory=ep_bringup
+WorkingDirectory=/var/lib/ep_bringup
+ExecStart=/usr/local/bin/ep_bringup
+Restart=always
+RestartSec=1
+# Thread IMU dùng ưu tiên cao; cần quyền với /dev/tty*, /dev/gpiochip*, AF_PACKET (packet:hdlcX)
+AmbientCapabilities=CAP_SYS_NICE CAP_NET_RAW
+StandardInput=null
+
+[Install]
+WantedBy=multi-user.target

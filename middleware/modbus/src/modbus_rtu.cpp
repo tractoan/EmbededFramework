@@ -87,7 +87,8 @@ void ModbusRtuProtocol::on_rx(const std::uint8_t* data, std::size_t len) {
 }
 
 void ModbusRtuProtocol::poll(std::uint64_t now_ms) {
-    if (rx_len_ == 0 || now_ms - last_rx_ms_ < kFrameTimeoutMs) return;
+    // last_rx_ms_ (on_rx) có thể mới hơn now_ms của vòng lặp kênh -> so sánh dạng cộng, không tràn số
+    if (rx_len_ == 0 || now_ms < last_rx_ms_ + kFrameTimeoutMs) return;
     // Khoảng lặng: coi toàn bộ dữ liệu còn lại là một khung (vd. function code không hỗ trợ)
     if (rx_len_ >= 4 && crc_ok(rx_, rx_len_) && addressed_to_me(rx_[0])) {
         frames_ok_.fetch_add(1);

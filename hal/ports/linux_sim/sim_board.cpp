@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include "sim_bringup.hpp"
 #include "sim_peripherals.hpp"
 
 namespace hal {
@@ -13,6 +14,7 @@ public:
         status_led_.configure(PinMode::Output);
         alarm_led_.configure(PinMode::Output);
         button_.configure(PinMode::InputPullUp);
+        bringup_.init();
         if (!core::is_ok(aux_.open(UartConfig{}))) {
             std::fprintf(stderr, "[SIM] aux UART: cannot bind udp port %u (disabled)\n", aux_.port());
             aux_ok_ = false;
@@ -39,6 +41,15 @@ public:
     II2c* i2c(I2cId id) override { return id == I2cId::Sensor ? &i2c_ : nullptr; }
     INvStorage* storage() override { return &storage_; }
 
+    std::size_t serial_count() const override { return sim::SimBringupHw::kSerials; }
+    IUart* serial(std::size_t i) override { return bringup_.serial(i); }
+    std::size_t digital_input_count() const override { return sim::SimBringupHw::kDigital; }
+    IGpio* digital_input(std::size_t i) override { return bringup_.input(i); }
+    std::size_t digital_output_count() const override { return sim::SimBringupHw::kDigital; }
+    IGpio* digital_output(std::size_t i) override { return bringup_.output(i); }
+    std::size_t hdlc_count() const override { return sim::SimBringupHw::kHdlc; }
+    IHdlcPort* hdlc(std::size_t i) override { return bringup_.hdlc(i); }
+
     [[noreturn]] void reset() override {
         std::fputs("[SIM] board reset\n", stdout);
         std::fflush(stdout);
@@ -54,6 +65,7 @@ private:
     bool aux_ok_ = true;
     sim::SimI2c i2c_;
     sim::SimFileStorage storage_{4096};
+    sim::SimBringupHw bringup_;   // 12 serial, 20 DI/DO, 2 HDLC-IMU (sản phẩm hw_bringup)
 };
 
 }  // namespace

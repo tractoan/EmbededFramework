@@ -18,21 +18,26 @@ Mục tiêu:
 ├────────────────────────────────────────────────────────────────────────┤
 │ APPLICATION & BUSINESS (app/)                                          │
 │  modules/   TemperatureMonitor · AlarmController · <module của bạn>    │
+│             SerialBringup · IoBringup · ImuBringup (bring-up phần cứng)│
 │  framework/ IModule · ModuleManager(Active Object) · StateMachine      │
 │             System (Composition Root) · SystemContext (DI)             │
 ├────────────────────────────────────────────────────────────────────────┤
 │ MIDDLEWARE (middleware/)  ngăn xếp truyền thông                        │
 │  comm/   IByteStream · IProtocol · LinkManager · CliProtocol           │
-│  modbus/ ModbusRtuProtocol · bảng ánh xạ Map   (mavlink/ ... sau này)  │
+│  modbus/ ModbusRtuProtocol · bảng ánh xạ Map                           │
+│  mavlink/ MavlinkProtocol (v1/v2, PARAM_*, COMMAND_*) · IDialect       │
 ├────────────────────────────────────────────────────────────────────────┤
 │ SERVICE (services/)                                                    │
 │  EventBus · ParamStore(NV+CRC) · CommandService(bảng lệnh) · Logger    │
 │  LedService · Device drivers (Tmp102 : ITemperatureSensor)             │
+│  SerialPortBank · GpioInput/OutputBank · HdlcImu + ImuFormat (bảng)    │
 ├──────────────────────────────────┬─────────────────────────────────────┤
 │ OSAL (osal/)                     │ HAL (hal/)                          │
 │  Thread · Mutex · Semaphore      │  IGpio · IUart · II2c · INvStorage  │
+│                                  │  IHdlcPort (SDLC/HDLC)              │
 │  Queue<T,N> · time · Critical    │  IBoard (ID logic -> chân vật lý)   │
-│  ports: posix │ freertos │ ...   │  ports: linux_sim │ stm32f4 │ ...   │
+│  ports: posix │ freertos │ ...   │  ports: linux_sim │ linux_cpu │     │
+│                                  │         stm32f4 │ ...               │
 ├──────────────────────────────────┴─────────────────────────────────────┤
 │ UTILS (utils/) crc32/crc16 · fixed-point format · RingBuffer (SPSC)    │
 ├────────────────────────────────────────────────────────────────────────┤
@@ -78,22 +83,26 @@ EmbededFramework/
 │   ├── include/osal/           # API trung lập: thread, mutex, semaphore, queue, time, critical
 │   └── ports/{posix,freertos}/ # osal_port_types.hpp + osal_<os>.cpp
 ├── hal/
-│   ├── include/hal/            # gpio, uart, i2c, storage, board
-│   └── ports/{linux_sim,stm32f4}/
+│   ├── include/hal/            # gpio, uart, i2c, storage, hdlc, board
+│   └── ports/{linux_sim,linux_cpu,stm32f4}/   # linux_cpu: tty/RS485, GPIO chardev, HDLC thật
 ├── services/
 │   ├── include/services/       # event_bus, param_store, command_service, logger, led_service
-│   └── include/services/drivers/  # temperature_sensor (interface), tmp102 (driver)
+│   │                           # serial_port_bank (loopback/stream nhiều cổng)
+│   └── include/services/drivers/  # temperature_sensor, tmp102, digital_io, imu (+ImuFormat), hdlc_imu
 ├── middleware/
 │   ├── comm/                   # byte_stream, protocol, link_manager, cli_protocol
-│   └── modbus/                 # modbus_map (bảng ánh xạ), modbus_rtu (slave)
+│   ├── modbus/                 # modbus_map (bảng ánh xạ), modbus_rtu (slave)
+│   └── mavlink/                # codec v1/v2, mavlink_protocol, common.hpp (bản tin chuẩn)
 ├── app/
 │   ├── framework/include/app/  # module, module_manager, state_machine, system, product
 │   └── modules/                # module nghiệp vụ tái sử dụng + app_events.hpp, app_params.hpp
 ├── products/
 │   ├── thermo_pro/             # 3 module, latch, StatsReporter, CLI + Modbus (modbus_map.cpp)
-│   └── thermo_lite/            # 2 module, chỉ CLI, cấu hình nhỏ cho MCU ít RAM
+│   ├── thermo_lite/            # 2 module, chỉ CLI, cấu hình nhỏ cho MCU ít RAM
+│   └── hw_bringup/             # bring-up phần cứng trên CPU Linux: 12 serial, GNSS, 20 DI/DO, 2 IMU, MAVLink
 ├── platform/{linux,stm32f4_freertos}/main.cpp   # entry point theo nền tảng
 ├── tools/modbus_udp_client.py  # client Modbus RTU-over-UDP để thử bản mô phỏng
+├── tools/mavlink/              # bringup.xml (dialect), bringup_gcs.py (GCS dòng lệnh), mavlink_dialect.py
 └── tests/                      # unit test host + mocks HAL/stream
 ```
 
@@ -297,7 +306,11 @@ Thứ gì cần mutex/thread (vd. `osal::Queue`) thuộc OSAL; thứ gì gắn v
 dùng interface HAL, thêm con trỏ vào `app::Devices`, khởi tạo trong `System::bring_up_devices()`.
 Nghiệp vụ chỉ phụ thuộc interface → thay chip cảm biến không ảnh hưởng nghiệp vụ.
 
-### 6.7 Thêm giao thức mới (vd. MAVLink, giao thức riêng)
+### 6.7 Thêm giao thức mới (vd. giao thức riêng)
+
+Ví dụ đầy đủ: `middleware/mavlink/` (giao thức) + `products/hw_bringup/mavlink_dialect.cpp` (ánh xạ của sản phẩm,
+`mavlink::IDialect`) + `tests/test_mavlink.cpp` (khung mẫu sinh bằng pymavlink).
+
 
 1. Tạo `middleware/<proto>/` với target `ep_proto_<proto>` link `ep_comm`; thư viện bên thứ ba (vd. header
    MAVLink sinh từ XML) đặt ở `third_party/` và **chỉ** target này được include.
@@ -341,6 +354,16 @@ temp                         nhiệt độ hiện tại, thống kê
 alarm status | ack           trạng thái cảnh báo / xác nhận
 link list | set <kênh> <off|auto|cli|modbus>   kênh truyền thông & đổi giao thức
 ```
+
+### CPU Linux – sản phẩm bring-up phần cứng (MAVLink)
+
+```bash
+cmake -B build-cpu -DEP_PLATFORM=linux_cpu -DEP_PRODUCT=hw_bringup
+```
+
+Mô phỏng: `-DEP_PRODUCT=hw_bringup` với platform mặc định `linux_sim`. Chi tiết, giao diện MAVLink, cấu hình phần cứng:
+[`products/hw_bringup/README.md`](products/hw_bringup/README.md). Test module bring-up chỉ được build khi `EP_PRODUCT=hw_bringup`
+(event payload 128 byte), nên CI nên chạy `ctest` cho cả `thermo_pro` và `hw_bringup`.
 
 ### STM32F407 + FreeRTOS
 

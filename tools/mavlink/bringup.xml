@@ -1,0 +1,100 @@
+<?xml version="1.0"?>
+<!--
+  Dialect MAVLink của firmware bring-up phần cứng (products/hw_bringup).
+  Phần mềm giao diện sinh mã từ file này bằng mavgen (C, C#, Python, Java...):
+      mavgen.py (lang CS, wire protocol 2.0) bringup.xml
+  common.xml (MAVLink chuẩn) được include: HEARTBEAT, STATUSTEXT, SERIAL_CONTROL, COMMAND_LONG/ACK, PARAM_*.
+
+  Dữ liệu firmware -> giao diện:
+    BRINGUP_STATUS (1 Hz), SERIAL_LOOPBACK_STATUS (ser.report_ms), IO_STATUS (khi đổi + io.report_ms),
+    IMU_DATA (imu.rate_hz, mỗi IMU một bản tin), SERIAL_CONTROL [device=GPS1, flags=REPLY] (dữ liệu máy thu GNSS),
+    STATUSTEXT (sự kiện), HEARTBEAT (1 Hz).
+  Giao diện -> firmware:
+    OUTPUT_SET, COMMAND_LONG(MAV_CMD_DO_SET_RELAY: param1=kênh, param2=0/1),
+    SERIAL_CONTROL [device=GPS1] (lệnh cấu hình gửi tới máy thu; baudrate != 0 -> đổi tốc độ cổng),
+    PARAM_REQUEST_LIST / PARAM_SET, COMMAND_LONG(MAV_CMD_PREFLIGHT_STORAGE: param1=1 lưu tham số).
+-->
+<mavlink>
+  <include>common.xml</include>
+  <version>3</version>
+  <dialect>62</dialect>
+  <enums>
+    <enum name="BRINGUP_GNSS_STATE">
+      <entry value="0" name="BRINGUP_GNSS_STATE_DETECTING"><description>Waiting for the first byte from the receiver (detection window after boot).</description></entry>
+      <entry value="1" name="BRINGUP_GNSS_STATE_CONNECTED"><description>Receiver detected: data forwarded, configuration commands accepted.</description></entry>
+      <entry value="2" name="BRINGUP_GNSS_STATE_ABSENT"><description>No data in the detection window: the port is tested as loopback.</description></entry>
+    </enum>
+    <enum name="BRINGUP_SERIAL_ROLE">
+      <entry value="0" name="BRINGUP_SERIAL_ROLE_LOOPBACK"><description>Port under loopback test.</description></entry>
+      <entry value="1" name="BRINGUP_SERIAL_ROLE_GCS"><description>Port used by this MAVLink link.</description></entry>
+      <entry value="2" name="BRINGUP_SERIAL_ROLE_GNSS"><description>Port connected to the GNSS receiver.</description></entry>
+      <entry value="3" name="BRINGUP_SERIAL_ROLE_DISABLED"><description>Port not used.</description></entry>
+    </enum>
+    <enum name="BRINGUP_LOOP_RESULT">
+      <entry value="0" name="BRINGUP_LOOP_RESULT_NONE"><description>Not tested yet.</description></entry>
+      <entry value="1" name="BRINGUP_LOOP_RESULT_PASS"><description>Test frame received back unchanged.</description></entry>
+      <entry value="2" name="BRINGUP_LOOP_RESULT_TIMEOUT"><description>Nothing received.</description></entry>
+      <entry value="3" name="BRINGUP_LOOP_RESULT_MISMATCH"><description>Received data differs from the test frame.</description></entry>
+      <entry value="4" name="BRINGUP_LOOP_RESULT_OPEN_ERROR"><description>The port could not be opened.</description></entry>
+    </enum>
+    <enum name="BRINGUP_IMU_FLAGS" bitmask="true">
+      <entry value="1" name="BRINGUP_IMU_FLAGS_FRESH"><description>A valid frame was received within imu.timeout_ms.</description></entry>
+      <entry value="2" name="BRINGUP_IMU_FLAGS_EVER_RECEIVED"><description>Sample fields hold the last valid frame.</description></entry>
+      <entry value="4" name="BRINGUP_IMU_FLAGS_START_FAILED"><description>The SDLC/HDLC port could not be opened.</description></entry>
+    </enum>
+  </enums>
+  <messages>
+    <message id="62000" name="BRINGUP_STATUS">
+      <description>Overall bring-up state (1 Hz).</description>
+      <field type="uint32_t" name="time_boot_ms" units="ms">Time since boot.</field>
+      <field type="uint32_t" name="gnss_rx_bytes">Bytes received from the GNSS port.</field>
+      <field type="uint32_t" name="gnss_tx_bytes">Bytes sent to the GNSS port.</field>
+      <field type="uint32_t" name="gnss_baudrate" units="bps">Current GNSS port baudrate.</field>
+      <field type="uint8_t" name="gnss_state" enum="BRINGUP_GNSS_STATE">GNSS receiver state.</field>
+      <field type="uint8_t" name="gcs_port">Serial index used by this link (255: none).</field>
+      <field type="uint8_t" name="gnss_port">Serial index reserved for the GNSS receiver (255: none).</field>
+      <field type="uint8_t" name="serial_count">Number of serial ports.</field>
+    </message>
+    <message id="62001" name="SERIAL_LOOPBACK_STATUS">
+      <description>Loopback test result of every serial port.</description>
+      <field type="uint32_t[12]" name="pass_count">Passed tests per port.</field>
+      <field type="uint32_t[12]" name="fail_count">Failed tests per port.</field>
+      <field type="uint16_t" name="ok_mask">Bit i: last loopback test of port i passed.</field>
+      <field type="uint16_t" name="tested_mask">Bit i: port i is under loopback test.</field>
+      <field type="uint8_t" name="port_count">Number of valid entries.</field>
+      <field type="uint8_t[12]" name="role" enum="BRINGUP_SERIAL_ROLE">Role of each port.</field>
+      <field type="uint8_t[12]" name="result" enum="BRINGUP_LOOP_RESULT">Last loopback result of each port.</field>
+    </message>
+    <message id="62002" name="IO_STATUS">
+      <description>Digital inputs and outputs (on change and periodically).</description>
+      <field type="uint32_t" name="time_boot_ms" units="ms">Time since boot.</field>
+      <field type="uint32_t" name="input_mask">Bit i: level of digital input i.</field>
+      <field type="uint32_t" name="output_mask">Bit i: commanded level of digital output i.</field>
+      <field type="uint8_t" name="input_count">Number of digital inputs.</field>
+      <field type="uint8_t" name="output_count">Number of digital outputs.</field>
+    </message>
+    <message id="62003" name="OUTPUT_SET">
+      <description>Set digital outputs: out = (out AND NOT mask) OR (value AND mask). Answered by IO_STATUS.</description>
+      <field type="uint32_t" name="mask">Outputs to change.</field>
+      <field type="uint32_t" name="value">New levels.</field>
+      <field type="uint8_t" name="target_system">System ID.</field>
+      <field type="uint8_t" name="target_component">Component ID.</field>
+    </message>
+    <message id="62004" name="IMU_DATA">
+      <description>Latest decoded sample and frame statistics of one SDLC/HDLC IMU.</description>
+      <field type="uint32_t" name="time_boot_ms" units="ms">Time since boot.</field>
+      <field type="uint32_t" name="frame_count">Valid frames received.</field>
+      <field type="uint32_t" name="error_count">Frames rejected (FCS, length, checksum).</field>
+      <field type="float[3]" name="gyro" units="rad/s">Angular rate X, Y, Z.</field>
+      <field type="float[3]" name="accel" units="m/s/s">Specific force X, Y, Z.</field>
+      <field type="float" name="temperature" units="degC">Temperature (NaN: not available).</field>
+      <field type="uint16_t" name="status">Raw IMU status word.</field>
+      <field type="uint16_t" name="rate_hz" units="Hz">Measured valid frame rate.</field>
+      <field type="uint8_t" name="imu_id">IMU index.</field>
+      <field type="uint8_t" name="imu_type">IMU format id (1: ln200, 2: hg1700).</field>
+      <field type="uint8_t" name="flags" enum="BRINGUP_IMU_FLAGS" display="bitmask">Status flags.</field>
+      <field type="uint8_t" name="raw_len">Valid bytes in raw.</field>
+      <field type="uint8_t[48]" name="raw">Start of the last raw frame (for ICD cross-check).</field>
+    </message>
+  </messages>
+</mavlink>

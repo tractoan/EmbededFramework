@@ -11,3 +11,11 @@ add_library(ep_modules STATIC
   modules/alarm_controller/alarm_controller.cpp)
 target_include_directories(ep_modules PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/modules)
 target_link_libraries(ep_modules PUBLIC ep_app_framework)
+
+# Nhóm module bring-up phần cứng (serial/GNSS, I/O số, IMU). Event payload tới 128 byte nên chỉ
+# biên dịch khi sản phẩm link tới (EXCLUDE_FROM_ALL) và đặt EP_CFG_EVENT_PAYLOAD_SIZE >= 128.
+add_library(ep_modules_bringup STATIC EXCLUDE_FROM_ALL
+  modules/serial_bringup/serial_bringup.cpp
+  modules/io_bringup/io_bringup.cpp
+  modules/imu_bringup/imu_bringup.cpp)
+target_link_libraries(ep_modules_bringup PUBLIC ep_modules)

@@ -1,2 +1,3 @@
 build*/
 ep_nvram.bin
+__pycache__/
