@@ -16,4 +16,7 @@ std::uint16_t crc16_ccitt(const void* data, std::size_t len, std::uint16_t crc =
 // CRC-16/MODBUS (poly 0xA001 reflected, init 0xFFFF) – truyền byte thấp trước.
 std::uint16_t crc16_modbus(const void* data, std::size_t len, std::uint16_t crc = 0xFFFF);
 
+// CRC-16/MCRF4XX (= "X.25" trong MAVLink; poly 0x1021 reflected, init 0xFFFF) – checksum khung MAVLink.
+std::uint16_t crc16_mcrf4xx(const void* data, std::size_t len, std::uint16_t crc = 0xFFFF);
+
 }  // namespace utils

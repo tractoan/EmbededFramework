@@ -2,6 +2,7 @@
 #   core/   kiểu nền tảng (Status, config, NonCopyable, macro compiler)
 #   osal/   trừu tượng hóa hệ điều hành   (port chọn lúc build: posix, freertos...)
 #   hal/    trừu tượng hóa ngoại vi TRÊN chip (port theo board: linux_sim, stm32f4...)
+#   net/    TCP/IP (IPv4): TcpListener/TcpConnection/UdpSocket, port posix | lwip (EP_NET_PORT)
 #   device/ driver thiết bị NGOÀI chip trên board (TMP102...), chỉ dùng bus HAL -> chạy mọi board
 #   target/ khởi động của nền tảng đích (target::init/run/stop_requested), chọn qua EP_TARGET
 #
@@ -11,4 +12,5 @@ add_subdirectory(core)
 add_subdirectory(osal)
 add_subdirectory(hal)
 add_subdirectory(device)
+add_subdirectory(net)
 add_subdirectory(target)

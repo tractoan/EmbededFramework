@@ -10,6 +10,8 @@ TEST(utils_crc_known_vectors) {
     CHECK_EQ(utils::crc32(s, 9), 0xCBF43926u);
     CHECK_EQ(utils::crc16_ccitt(s, 9), 0x29B1u);
     CHECK_EQ(utils::crc16_modbus(s, 9), 0x4B37u);
+    CHECK_EQ(utils::crc16_mcrf4xx(s, 9), 0x6F91u);
+    CHECK_EQ(utils::crc16_mcrf4xx(s + 4, 5, utils::crc16_mcrf4xx(s, 4)), 0x6F91u);
     // Tính nối tiếp nhiều khối phải bằng tính một lần
     CHECK_EQ(utils::crc32(s + 4, 5, utils::crc32(s, 4)), 0xCBF43926u);
     CHECK_EQ(utils::crc16_ccitt(s + 4, 5, utils::crc16_ccitt(s, 4)), 0x29B1u);
