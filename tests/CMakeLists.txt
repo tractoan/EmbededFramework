@@ -11,7 +11,14 @@ add_executable(ep_tests
   test_alarm_controller.cpp
   test_cli_protocol.cpp
   test_modbus.cpp
-  test_link_manager.cpp)
+  test_link_manager.cpp
+  test_mavlink.cpp)
 target_include_directories(ep_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(ep_tests PRIVATE ep_heap_guard ep_business ep_proto_cli ep_proto_modbus)
+target_link_libraries(ep_tests PRIVATE ep_heap_guard ep_business ep_proto_cli ep_proto_modbus ep_proto_mavlink)
 add_test(NAME ep_tests COMMAND ep_tests)
+
+# Test TCP/IP chỉ khi target có mạng
+if(TARGET ep_comm_net)
+  target_sources(ep_tests PRIVATE test_net.cpp)
+  target_link_libraries(ep_tests PRIVATE ep_comm_net)
+endif()

@@ -25,6 +25,16 @@ std::uint16_t crc16_ccitt(const void* data, std::size_t len, std::uint16_t crc) 
     return crc;
 }
 
+std::uint16_t crc16_mcrf4xx(const void* data, std::size_t len, std::uint16_t crc) {
+    const auto* p = static_cast<const std::uint8_t*>(data);
+    while (len--) {   // thuật toán byte-wise của checksum.h (MAVLink)
+        std::uint8_t tmp = static_cast<std::uint8_t>(*p++ ^ (crc & 0xFFu));
+        tmp              = static_cast<std::uint8_t>(tmp ^ (tmp << 4));
+        crc = static_cast<std::uint16_t>((crc >> 8) ^ (tmp << 8) ^ (tmp << 3) ^ (tmp >> 4));
+    }
+    return crc;
+}
+
 std::uint16_t crc16_modbus(const void* data, std::size_t len, std::uint16_t crc) {
     const auto* p = static_cast<const std::uint8_t*>(data);
     while (len--) {

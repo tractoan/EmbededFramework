@@ -5,7 +5,8 @@ Mục tiêu:
 
 - **Chuyển nền tảng** (MCU, board, RTOS, Linux) mà **không sửa** code nghiệp vụ.
 - **Tùy biến nghiệp vụ** ở nhiều mức: chọn module, cấu hình lúc biên dịch, tham số lúc chạy.
-- **Đổi giao thức truyền thông linh hoạt** (CLI, Modbus RTU, MAVLink…) theo sản phẩm, lúc chạy, hoặc tự nhận dạng.
+- **Đổi giao thức truyền thông linh hoạt** (CLI, Modbus RTU, MAVLink v1…) qua UART, **TCP hoặc UDP**, theo sản phẩm,
+  lúc chạy, hoặc tự nhận dạng.
 - Phù hợp embedded: không exception, không RTTI, **không cấp phát động sau khi khởi động** (được kiểm chứng lúc chạy
   bằng bộ chặn heap), tài nguyên tĩnh, **priority của từng task cấu hình được** (16 mức, giống nhau trên mọi RTOS).
 
@@ -24,7 +25,8 @@ Mục tiêu:
 ├────────────────────────────────────────────────────────────────────────┤
 │ COMMUNICATION (communication/)  ngăn xếp truyền thông                  │
 │  link/   IByteStream · IProtocol · LinkManager (chọn/đổi giao thức)    │
-│  cli/    CliProtocol     modbus/ ModbusRtuProtocol + Map   (mavlink/…) │
+│  net/    TcpServerStream · TcpClientStream · UdpStream                 │
+│  cli/ CliProtocol · modbus/ ModbusRtu+Map · mavlink/ MavlinkV1+Map     │
 ├────────────────────────────────────────────────────────────────────────┤
 │ SERVICES (services/)  dịch vụ hệ thống: có trạng thái, có chính sách   │
 │  ParamStore(NV+CRC) · CommandService(bảng lệnh) · Logger · LedService  │
@@ -33,6 +35,8 @@ Mục tiêu:
 │  Event · EventBus · Buffer + pool tĩnh (BlockPool/Pool/ChainAllocator) │
 ╞═════════════════════════ PLATFORM (platform/) ═════════════════════════╡
 │ DEVICE (device/)  thiết bị NGOÀI chip: Tmp102 : ITemperatureSensor     │
+│ NET (net/)  TCP/IP IPv4: TcpListener · TcpConnection · UdpSocket       │
+│             ports: posix (BSD socket) │ lwip (MCU)   – EP_NET_PORT     │
 ├──────────────────────────────────┬─────────────────────────────────────┤
 │ OSAL (osal/)                     │ HAL (hal/)  ngoại vi TRÊN chip      │
 │  Thread · Mutex · Semaphore      │  IGpio · IUart · II2c · INvStorage  │
@@ -52,6 +56,7 @@ Mục tiêu:
 | **Platform › Core** | Kiểu nền tảng: mã lỗi, cấu hình tĩnh, NonCopyable, macro compiler | Phụ thuộc bất kỳ thứ gì (trừ utils) | – |
 | **Platform › OSAL** | Thread, mutex, semaphore, queue, thời gian, vùng găng | Truy cập phần cứng | **Link-time** (chọn port khi build) → zero-overhead |
 | **Platform › HAL** | Ngoại vi **trên chip**: GPIO, UART, I2C, NV storage; `IBoard` ánh xạ ID logic → phần cứng | Gọi OSAL, chứa logic nghiệp vụ, biết tới sản phẩm | **Runtime** (interface ảo) → mock được, nhiều instance |
+| **Platform › Net** | TCP/IP (IPv4): `TcpListener`, `TcpConnection`, `UdpSocket`, timeout trên mọi thao tác, không heap | Biết giao thức ứng dụng; target không có mạng thì không có lớp này (`EP_NET_PORT` trống) | **Link-time** (port `posix`, `lwip`) |
 | **Platform › Device** | Driver thiết bị **ngoài chip** trên board (cảm biến, EEPROM, màn hình…) + interface theo loại thiết bị | Dùng services (EventBus, ParamStore, Logger), tự tạo thread, gọi API vendor | **Runtime** (`ITemperatureSensor`…) |
 | **Messaging** | Cơ chế giao tiếp của framework: `Event`, `EventBus` (pub/sub, quy ước chia dải ID), payload lớn `Buffer` + pool tĩnh | Định nghĩa event cụ thể của lớp khác; phụ thuộc services trở lên; có port theo nền tảng | Interface (`IEventListener`, `IBufferAllocator`) |
 | **Services** | Dịch vụ hệ thống dùng chung, có trạng thái và chính sách: tham số, bảng lệnh, log, LED | Chứa quy tắc nghiệp vụ của sản phẩm; gọi API vendor trực tiếp | Interface (`ILogSink`, `ICommandHandler`) |
@@ -68,7 +73,7 @@ utils ◄── core ◄─┤ osal ◄──┬── device                 �
                  │ hal  ◄──┴── target                 │
                  └────────────────┬───────────────────┘
                                   ▼
-            messaging ◄── services ◄── communication(link ◄ cli, modbus) ◄── app_runtime ◄── business ◄── product
+            messaging ◄── services ◄── communication(link ◄ net, cli, modbus, mavlink) ◄── app_runtime ◄── business ◄── product
                                                                                                              │
                                                       main.cpp (thư mục gốc) ◄── nối product + target ───────┘
 ```
@@ -110,6 +115,7 @@ EmbededFramework/
 │   ├── hal/
 │   │   ├── include/hal/        # gpio, uart, i2c, storage, board
 │   │   └── ports/{linux_sim,stm32f4}/
+│   ├── net/                    # TCP/IP: include/net/net.hpp, ports/{posix,lwip}
 │   ├── device/
 │   │   └── include/device/     # temperature_sensor (interface), tmp102 (driver)
 │   └── target/                 # khởi động theo nền tảng đích: target::init / run / stop_requested
@@ -125,15 +131,18 @@ EmbededFramework/
 │   └── include/services/       # param_store, param_cli, command_service, logger, led_service
 ├── communication/
 │   ├── link/                   # byte_stream, protocol, link_manager      (ep_comm)
+│   ├── net/                    # tcp_server/tcp_client/udp stream         (ep_comm_net, khi có mạng)
 │   ├── cli/                    # cli_protocol                             (ep_proto_cli)
-│   └── modbus/                 # modbus_map (bảng ánh xạ), modbus_rtu     (ep_proto_modbus)
+│   ├── modbus/                 # modbus_map (bảng ánh xạ), modbus_rtu     (ep_proto_modbus)
+│   └── mavlink/                # mavlink_v1 (codec), mavlink_map, mavlink_protocol (ep_proto_mavlink)
 ├── app/
 │   ├── runtime/include/app/    # module, module_manager, state_machine, system, product
 │   └── business/               # module nghiệp vụ tái sử dụng + app_events.hpp, app_params.hpp
 ├── products/
-│   ├── thermo_pro/             # 3 module, latch, StatsReporter, CLI + Modbus (modbus_map.cpp)
+│   ├── thermo_pro/             # 3 module, latch, StatsReporter; CLI/Modbus/MAVLink qua UART, TCP, UDP
 │   └── thermo_lite/            # 2 module, chỉ CLI, cấu hình nhỏ cho MCU ít RAM
-├── tools/modbus_udp_client.py  # client Modbus RTU-over-UDP để thử bản mô phỏng
+├── tools/                      # modbus_udp_client.py, mavlink_client.py (trạm mặt đất tối giản),
+│                               # check_mavlink_pymavlink.py (đối chiếu bằng pymavlink)
 └── tests/                      # unit test host + mocks HAL/stream
 ```
 
@@ -285,13 +294,13 @@ Mỗi giao thức chỉ là một *cách biểu diễn* khác của mô hình đ
                            │  Event miền, Param
  ═════════════════ EventBus · ParamStore · CommandService ═════════════  ← hợp đồng ổn định
                            │
- ① IProtocol        CliProtocol | ModbusRtuProtocol(+Map) | MavlinkProtocol (tương lai)
+ ① IProtocol        CliProtocol | ModbusRtuProtocol(+Map) | MavlinkV1Protocol(+Map)
                            │  codec + phiên + ánh xạ Event/Param ↔ message
  ② LinkManager      kênh "console", "aux"...: 1 stream + giao thức cho phép + tham số comm.<kênh>
                            │
- ③ IByteStream      UartStream | (UdpStream, UsbCdcStream ...)
+ ③ IByteStream      UartStream | TcpServerStream | TcpClientStream | UdpStream | (UsbCdc...)
                            │
- HAL                IUart (Console, Aux), ...
+ HAL / Net          IUart (Console, Aux) · TcpListener/TcpConnection/UdpSocket
 ```
 
 | Muốn đổi… | Chỉ thay | Không động tới |
@@ -349,6 +358,75 @@ tools/modbus_udp_client.py text "link set aux auto"   # giờ aux là CLI: gửi
 ```bash
 tools/modbus_udp_client.py coil 0 on             # auto: Modbus được tự nhận dạng, xác nhận cảnh báo
 ```
+
+### 5.4 TCP/IP
+
+`platform/net/` trừu tượng hóa socket theo cùng mô hình OSAL (port chọn lúc build bằng `EP_NET_PORT`):
+`posix` (Linux/macOS) và `lwip` (MCU, socket API của lwIP 2.x; netif/`tcpip_init()` do target khởi tạo).
+Trên đó, `communication/net/` cung cấp ba `IByteStream`, nên **mọi giao thức** chạy được qua mạng:
+
+| Stream | Hành vi |
+|---|---|
+| `TcpServerStream` | Lắng nghe một cổng, một client tại một thời điểm; client ngắt thì chờ client kế tiếp |
+| `TcpClientStream` | Kết nối tới một địa chỉ, tự kết nối lại sau `retry_ms` khi mất kết nối |
+| `UdpStream` | Mỗi datagram là một khối byte; gửi tới đích cố định (`set_remote`) hoặc trả lời người gửi gần nhất |
+
+Thread RX của kênh là nơi duy nhất mở/đóng kết nối; ghi từ thread khác được khóa chung với việc đóng/mở,
+nên không bao giờ ghi vào socket đã đóng. Không cấp phát heap (không dùng `getaddrinfo`).
+Target không có mạng để trống `EP_NET_PORT`: `ep_net`/`ep_comm_net` không được build và sản phẩm tự bỏ
+kênh mạng (`EP_HAS_NET`). Kênh của `thermo_pro` trên mô phỏng:
+
+| Kênh | Stream | Giao thức cho phép (mặc định in đậm) |
+|---|---|---|
+| `console` | UART (terminal) | **cli**, modbus |
+| `aux` | UART (UDP 15020 trên mô phỏng) | **modbus**, mavlink, cli – `auto` phân biệt Modbus/MAVLink |
+| `tcp` | `TcpServerStream` cổng 5760 | **mavlink**, modbus, cli |
+| `udp` | `UdpStream` gửi tới 127.0.0.1:14550 (cổng của QGroundControl) | **mavlink** |
+
+### 5.5 MAVLink v1
+
+`communication/mavlink/` là codec MAVLink v1 tối giản (không cấp phát, không cần thư viện sinh mã):
+khung `0xFE LEN SEQ SYSID COMPID MSGID PAYLOAD CRC`, CRC-16/MCRF4XX + `CRC_EXTRA` của từng message;
+parser chịu được rác, khung bị chia nhỏ, CRC sai (tự tái đồng bộ). Message hỗ trợ: HEARTBEAT,
+PARAM_REQUEST_LIST/READ, PARAM_SET, PARAM_VALUE, COMMAND_LONG, COMMAND_ACK, NAMED_VALUE_FLOAT, STATUSTEXT
+(độ dài và `CRC_EXTRA` đối chiếu với `pymavlink` dialects/v10/common.py).
+
+`MavlinkV1Protocol` làm gì:
+
+| Chức năng | Cơ chế |
+|---|---|
+| HEARTBEAT 1 Hz | `system_status` lấy từ Event qua `Map::states` (thermo_pro: ALARM/FAULT → `MAV_STATE_CRITICAL`) |
+| Param protocol | Tự động cho **mọi** tham số `ParamStore`; giá trị gửi dạng `REAL32`, `PARAM_SET` làm tròn về số nguyên, kiểm tra miền; luôn trả lại giá trị hiện tại |
+| COMMAND_LONG → COMMAND_ACK | Bảng `Map::commands` (thermo_pro: `MAV_CMD_USER_1` = xác nhận cảnh báo, `MAV_CMD_PREFLIGHT_STORAGE` = lưu/nạp tham số) |
+| Telemetry | Event → `NAMED_VALUE_FLOAT` (`Map::telemetry`), Event → `STATUSTEXT` (`Map::status_texts`) |
+| Giám sát liên kết | Nhận HEARTBEAT của trạm mặt đất → log kết nối / mất kết nối (3 s) |
+
+Bảng ánh xạ của sản phẩm: `products/thermo_pro/mavlink_map.cpp` (sysid 1, compid 191). Thử trên mô phỏng:
+
+```bash
+tools/mavlink_client.py --tcp 127.0.0.1:5760 watch 3          # HEARTBEAT, temp, STATUSTEXT
+```
+```bash
+tools/mavlink_client.py --tcp 127.0.0.1:5760 params           # 13/13 tham số
+```
+```bash
+tools/mavlink_client.py --tcp 127.0.0.1:5760 set alarm.high 700
+```
+```bash
+tools/mavlink_client.py --tcp 127.0.0.1:5760 cmd 31010 1      # xác nhận cảnh báo
+```
+```bash
+tools/mavlink_client.py --udp 14550 watch 3                   # như QGroundControl
+```
+
+Đối chiếu bằng thư viện chính thức (cần `pip install pymavlink`):
+
+```bash
+tools/check_mavlink_pymavlink.py tcp:127.0.0.1:5760
+```
+
+QGroundControl / Mission Planner kết nối được qua UDP 14550 hoặc TCP 5760 (thiết bị hiện là component
+không phải bộ lái – `MAV_AUTOPILOT_INVALID` – nên GCS chủ yếu hiển thị tham số, STATUSTEXT và giá trị đặt tên).
 
 ---
 
@@ -451,7 +529,7 @@ Thứ gì cần mutex/thread (vd. `osal::Queue`) thuộc OSAL; thứ gì gắn v
 Nghiệp vụ chỉ phụ thuộc interface → thay chip cảm biến không ảnh hưởng nghiệp vụ. HAL khác theo board,
 còn driver thiết bị giống nhau trên mọi board và có thể dùng lại ở dự án khác.
 
-### 6.7 Thêm giao thức mới (vd. MAVLink, giao thức riêng)
+### 6.7 Thêm giao thức mới (vd. MAVLink v2, CANopen, giao thức riêng)
 
 1. Tạo `communication/<proto>/` với target `ep_proto_<proto>` link `ep_comm`; thư viện bên thứ ba (vd. header
    MAVLink sinh từ XML) đặt ở `third_party/` và **chỉ** target này được include.
@@ -461,6 +539,9 @@ còn driver thiết bị giống nhau trên mọi board và có thể dùng lạ
 3. Đặt bảng ánh xạ Event/Param ↔ message ở sản phẩm (như `modbus_map.cpp`), không viết vào nghiệp vụ.
 4. Trong `product::setup()`: tạo instance (mỗi kênh một instance) và thêm vào danh sách của kênh.
 5. Test bằng `mock::ScriptedStream` + khung mẫu (golden frame), như `tests/test_modbus.cpp`, `tests/test_link_manager.cpp`.
+
+Ví dụ đầy đủ để tham khảo: `communication/mavlink/` (codec + protocol + bảng ánh xạ ở `products/thermo_pro/mavlink_map.cpp`)
+và `tests/test_mavlink.cpp`.
 
 ---
 
