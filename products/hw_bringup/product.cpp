@@ -15,8 +15,9 @@
 #include "mavlink/mavlink_protocol.hpp"
 #include "mavlink_dialect.hpp"
 #include "serial_bringup/serial_bringup.hpp"
-#include "services/drivers/digital_io.hpp"
-#include "services/drivers/hdlc_imu.hpp"
+#include "device/digital_io.hpp"
+#include "services/hdlc_imu.hpp"
+#include "services/buffer_allocators.hpp"
 #include "services/logger.hpp"
 #include "services/serial_port_bank.hpp"
 
@@ -25,10 +26,19 @@ namespace product {
 namespace {
 constexpr const char* kTag = "bringup";
 
+// Ưu tiên task (0 thấp .. 15 cao): đọc IMU cao nhất (không để tràn FIFO HDLC), cổng GNSS (stream)
+// và kênh giao diện trên nghiệp vụ; các cổng loopback và console thấp hơn; LED thấp nhất.
+constexpr osal::Priority kImuPriority      = osal::Priority::High;      // 12
+constexpr osal::Priority kGnssPortPriority = osal::Priority{10};
+constexpr osal::Priority kGcsLinkPriority  = osal::Priority{9};
+constexpr osal::Priority kAppPriority      = osal::Priority::Normal;    // 8
+constexpr osal::Priority kLoopPriority     = osal::Priority{5};
+constexpr osal::Priority kConsolePriority  = osal::Priority::Low;       // 4
+
 // Thiết bị/dịch vụ của sản phẩm – cấp phát tĩnh.
 svc::SerialPortBank g_ports;
-svc::GpioInputBank g_inputs;
-svc::GpioOutputBank g_outputs;
+device::GpioInputBank g_inputs;
+device::GpioOutputBank g_outputs;
 svc::HdlcImu g_imu[hw::kImuCount];
 
 core::Status setup_serial(hal::IBoard& board) {
@@ -47,6 +57,8 @@ core::Status setup_serial(hal::IBoard& board) {
         pc.mode = static_cast<int>(i) == hw::kGcsPort    ? svc::SerialMode::External
                   : static_cast<int>(i) == hw::kGnssPort ? svc::SerialMode::Stream
                                                          : svc::SerialMode::Loopback;
+        pc.priority    = static_cast<int>(i) == hw::kGnssPort ? kGnssPortPriority : kLoopPriority;
+        pc.stack_bytes = 2048;   // stack_mem = nullptr -> vùng stack tĩnh lúc khởi động
         const core::Status st = g_ports.add(pc);
         if (!core::is_ok(st)) return st;
     }
@@ -72,16 +84,34 @@ void setup_imu(hal::IBoard& board) {
         c.port         = hw::imu_port_config(i);
         c.software_fcs = hw::kImuSoftwareFcs;
         c.thread_name  = kThread[i % 4];
+        c.priority     = kImuPriority;
+        c.stack_bytes  = 3072;
         if (!core::is_ok(g_imu[i].init(board.hdlc(i), c))) {
             LOGW(kTag, "IMU%u: no SDLC/HDLC port %u on this board", static_cast<unsigned>(i), static_cast<unsigned>(i));
         }
     }
 }
 
+// Bộ nhớ cho Event::buffer: chỉ pool tĩnh (O(1), không phân mảnh, không heap). Sức chứa tính theo
+// header 24 B trên host 64-bit. Xem mức dùng/thất bại bằng "sys buffers".
+void setup_buffers() {
+    static svc::StaticBlockPool<64, 32> tiny;      // BringupStatus, STATUSTEXT ngắn (loạt thông báo lúc khởi động)
+    static svc::StaticBlockPool<128, 64> small;    // ImuSample, STATUSTEXT, lệnh GNSS
+    static svc::StaticBlockPool<256, 16> medium;   // bảng loopback 12-16 cổng
+    static svc::StaticBlockPool<1024, 16> large;   // gói dữ liệu GNSS (<= 512 B)
+    static svc::PoolAllocator pools({&tiny, &small, &medium, &large});
+    svc::Buffer::set_default_allocator(&pools);
+}
+
+void setup_tasks(app::TaskPlan& t) {
+    t.app  = osal::ThreadConfig{"app", kAppPriority, 4096, nullptr};
+    t.leds = osal::ThreadConfig{"led", osal::Priority::Low, 1024, nullptr};
+}
+
 core::Status setup_modules(app::ModuleManager& modules) {
     static app::SerialBringup serial(app::SerialBringup::Config{&g_ports, hw::kGcsPort, hw::kGnssPort});
     static app::IoBringup io(&g_inputs, &g_outputs);
-    static svc::IImu* const imus[hw::kImuCount] = {&g_imu[0], &g_imu[1]};
+    static device::IImu* const imus[hw::kImuCount] = {&g_imu[0], &g_imu[1]};
     static app::ImuBringup imu(imus, hw::kImuCount);
 
     core::Status st = modules.add(&serial);
@@ -93,7 +123,8 @@ core::Status setup_modules(app::ModuleManager& modules) {
 core::Status setup_links(app::ProductSetup& s) {
     // Console (stdin/stdout hoặc UART debug): CLI để chẩn đoán tại chỗ.
     static comm::CliProtocol console_cli;
-    core::Status st = s.links.add_channel("console", &s.console, {&console_cli}, comm::proto::kCli);
+    core::Status st =
+        s.links.add_channel("console", &s.console, {&console_cli}, comm::proto::kCli, kConsolePriority, 4096);
     if (!core::is_ok(st)) return st;
 
     // Cổng phần mềm giao diện: MAVLink (mặc định); CLI/auto chọn được bằng "link set gcs ...".
@@ -112,7 +143,7 @@ core::Status setup_links(app::ProductSetup& s) {
     static BringupDialect dialect;
     static mavlink::MavlinkProtocol gcs_mavlink(dialect);
     static comm::CliProtocol gcs_cli(true);
-    return s.links.add_channel("gcs", &gcs, {&gcs_mavlink, &gcs_cli}, comm::proto::kMavlink);
+    return s.links.add_channel("gcs", &gcs, {&gcs_mavlink, &gcs_cli}, comm::proto::kMavlink, kGcsLinkPriority, 4096);
 }
 
 }  // namespace
@@ -120,6 +151,8 @@ core::Status setup_links(app::ProductSetup& s) {
 const char* name() { return "hw_bringup"; }
 
 core::Status setup(app::ProductSetup& s) {
+    setup_buffers();
+    setup_tasks(s.tasks);
     core::Status st = setup_serial(s.board);
     if (!core::is_ok(st)) return st;
     setup_io(s.board);

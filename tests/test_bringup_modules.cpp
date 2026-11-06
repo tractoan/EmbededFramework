@@ -1,5 +1,4 @@
-// Module bring-up (chỉ build với EP_PRODUCT=hw_bringup: event payload 128 byte):
-// phát hiện máy thu GNSS trong 5 s, chuyển cổng sang loopback, chuyển tiếp dữ liệu/lệnh,
+// Module bring-up: phát hiện máy thu GNSS trong 5 s, chuyển cổng sang loopback, chuyển tiếp dữ liệu/lệnh,
 // đặt output, báo IMU; dialect MAVLink ánh xạ Event <-> bản tin.
 #include <cmath>
 
@@ -11,10 +10,26 @@
 #include "mocks.hpp"
 #include "osal/time.hpp"
 #include "serial_bringup/serial_bringup.hpp"
+#include "services/buffer_allocators.hpp"
 #include "test_framework.hpp"
 
 namespace {
 namespace bu = app::bringup;
+
+// Pool tĩnh cho Event::buffer trong test (giống pool sản phẩm cài lúc khởi động).
+struct PoolScope {
+    PoolScope() : prev_(svc::Buffer::default_allocator()) { svc::Buffer::set_default_allocator(&pools()); }
+    ~PoolScope() { svc::Buffer::set_default_allocator(prev_); }
+    static svc::PoolAllocator& pools() {
+        static svc::StaticBlockPool<256, 96> small;
+        static svc::StaticBlockPool<1024, 8> large;
+        static svc::PoolAllocator p({&small, &large});
+        return p;
+    }
+
+private:
+    svc::IBufferAllocator* prev_;
+};
 
 // Dãy cổng giả: điều khiển hoàn toàn bởi test (không thread).
 struct FakePorts final : svc::ISerialPorts {
@@ -50,6 +65,7 @@ struct FakePorts final : svc::ISerialPorts {
 };
 
 struct Ctx {
+    PoolScope pool;
     svc::EventBus bus;
     svc::ParamStore params;
     svc::CommandService cli;
@@ -61,17 +77,28 @@ struct Ctx {
         params.init(nullptr, &bus);
         bus.subscribe(svc::evt::kAny, &rec);
     }
-    template <typename T>
-    bool last(svc::EventId id, T& out) const {
+    const svc::Event* last_event(svc::EventId id) const {
         for (auto it = rec.events.rbegin(); it != rec.events.rend(); ++it) {
-            if (it->id == id) return it->get(out);
+            if (it->id == id) return &*it;
         }
-        return false;
+        return nullptr;
+    }
+    template <typename T>
+    bool last(svc::EventId id, T& out) const {   // payload inline
+        const svc::Event* e = last_event(id);
+        return e != nullptr && e->get(out);
+    }
+    template <typename T>
+    bool last_record(svc::EventId id, T& out) const {   // struct trong Event::buffer
+        const svc::Event* e = last_event(id);
+        return e != nullptr && bu::get_record(*e, out);
+    }
+    static std::string text_of(const svc::Event& e) {
+        return std::string(reinterpret_cast<const char*>(e.buffer.data()), e.buffer.size());
     }
     bool has_text(const char* needle) const {
         for (const auto& e : rec.events) {
-            bu::StatusText t{};
-            if (e.id == bu::kStatusText && e.get(t) && std::strstr(t.text, needle)) return true;
+            if (e.id == bu::kStatusText && text_of(e).find(needle) != std::string::npos) return true;
         }
         return false;
     }
@@ -110,10 +137,7 @@ TEST(serial_bringup_gnss_absent_switches_to_loopback) {
     CHECK(c.has_text("port 1 -> loopback"));
 
     // Lệnh GNSS khi không có máy thu bị bỏ, có thông báo
-    bu::GnssTxRequest req{};
-    req.len = 3;
-    std::memcpy(req.data, "ABC", 3);
-    m.on_event(svc::Event::make(bu::kGnssTxRequest, req));
+    m.on_event(svc::Event::make(bu::kGnssTxRequest, bu::GnssTxHeader{0}, svc::Buffer::copy_of("ABC", 3)));
     CHECK(ports.tx[1].empty() && c.has_text("command dropped"));
 
     // Báo cáo loopback: vai trò + kết quả từng cổng
@@ -121,17 +145,21 @@ TEST(serial_bringup_gnss_absent_switches_to_loopback) {
     ports.st[3].mode = svc::SerialMode::Loopback; ports.st[3].last = svc::LoopResult::Timeout; ports.st[3].fail = 2;
     ports.st[1].last = svc::LoopResult::Pass;
     m.on_tick(t0 + 10000);
-    bu::LoopbackStatus ls{};
+    bu::LoopbackHeader ls{};
     CHECK(c.last(bu::kLoopbackStatus, ls));
     CHECK_EQ(ls.count, 12);
-    CHECK(ls.role[0] == static_cast<std::uint8_t>(bu::SerialRole::Gcs));
-    CHECK(ls.role[1] == static_cast<std::uint8_t>(bu::SerialRole::Loopback));
+    const svc::Event* le = c.last_event(bu::kLoopbackStatus);
+    CHECK(le != nullptr && le->buffer.size() == 12 * sizeof(bu::PortResult));
+    bu::PortResult pr[12]{};
+    if (le != nullptr && le->buffer.size() == sizeof(pr)) std::memcpy(pr, le->buffer.data(), sizeof(pr));
+    CHECK(pr[0].role == static_cast<std::uint8_t>(bu::SerialRole::Gcs));
+    CHECK(pr[1].role == static_cast<std::uint8_t>(bu::SerialRole::Loopback));
     CHECK((ls.ok_mask & 0x6) == 0x6 && (ls.ok_mask & 0x8) == 0);
     CHECK((ls.tested_mask & 0xE) == 0xE && (ls.tested_mask & 0x1) == 0);
-    CHECK_EQ(ls.pass[2], 7u);
+    CHECK_EQ(pr[2].pass, 7u);
     CHECK(c.has_text("Serial 3 loopback FAIL (TIMEOUT)"));
     bu::BringupStatus bs{};
-    CHECK(c.last(bu::kBringupStatus, bs) && bs.gnss_state == bu::GnssState::Absent && bs.gnss_port == 1);
+    CHECK(c.last_record(bu::kBringupStatus, bs) && bs.gnss_state == bu::GnssState::Absent && bs.gnss_port == 1);
 }
 
 TEST(serial_bringup_gnss_connected_forwards_data_and_commands) {
@@ -145,23 +173,21 @@ TEST(serial_bringup_gnss_connected_forwards_data_and_commands) {
     m.on_tick(t0 + 1200);
     CHECK(m.gnss_state() == bu::GnssState::Connected);
     CHECK(ports.st[1].mode == svc::SerialMode::Stream);
-    CHECK_EQ(c.rec.count(bu::kGnssRxData), 2u);   // 70 + 30
+    CHECK_EQ(c.rec.count(bu::kGnssRxData), 1u);   // 100 byte trong một buffer
+    const svc::Event* ge = c.last_event(bu::kGnssRxData);
+    CHECK(ge != nullptr && ge->buffer.size() == 100 && Ctx::text_of(*ge) == std::string(100, 'N'));
     m.on_tick(t0 + 9000);                          // đã kết nối: không bao giờ chuyển sang loopback
     CHECK(m.gnss_state() == bu::GnssState::Connected);
 
-    bu::GnssTxRequest req{};
-    req.baudrate = 38400;
-    req.len      = 5;
-    std::memcpy(req.data, "CFG\r\n", 5);
-    m.on_event(svc::Event::make(bu::kGnssTxRequest, req));
+    m.on_event(svc::Event::make(bu::kGnssTxRequest, bu::GnssTxHeader{38400}, svc::Buffer::copy_of("CFG\r\n", 5)));
     CHECK(ports.tx[1] == "CFG\r\n" && ports.st[1].baudrate == 38400);
 
     // CLI "gnss send ..." -> event yêu cầu (thread kênh không ghi trực tiếp)
     char line[] = "gnss send $PCMD,1 2";
     CaptureOut out;
     c.cli.execute(line, out);
-    bu::GnssTxRequest q{};
-    CHECK(c.last(bu::kGnssTxRequest, q) && std::string(reinterpret_cast<char*>(q.data), q.len) == "$PCMD,1 2\r\n");
+    const svc::Event* q = c.last_event(bu::kGnssTxRequest);
+    CHECK(q != nullptr && Ctx::text_of(*q) == "$PCMD,1 2\r\n");
 
     // gnss.forward = 0 -> không chuyển tiếp
     c.params.set(app::params::kGnssForward, 0);
@@ -175,8 +201,8 @@ TEST(serial_bringup_gnss_connected_forwards_data_and_commands) {
 TEST(io_bringup_outputs_and_inputs) {
     Ctx c;
     mock::Gpio o[20], i[20];
-    svc::GpioOutputBank outs;
-    svc::GpioInputBank ins;
+    device::GpioOutputBank outs;
+    device::GpioInputBank ins;
     for (auto& p : o) outs.add(&p);
     for (auto& p : i) ins.add(&p);
     app::IoBringup m(&ins, &outs);
@@ -202,19 +228,19 @@ TEST(io_bringup_outputs_and_inputs) {
 }
 
 TEST(imu_bringup_reports_samples_and_failures) {
-    struct FakeImu final : svc::IImu {
+    struct FakeImu final : device::IImu {
         bool fail_start = false, has = false;
-        svc::ImuStats st{};
-        svc::ImuSample s{};
+        device::ImuStats st{};
+        device::ImuSample s{};
         const char* format_name() const override { return "ln200"; }
         std::uint8_t type_id() const override { return 1; }
         core::Status start() override { return fail_start ? core::Status::NotFound : core::Status::Ok; }
         void stop() override {}
-        bool latest(svc::ImuSample& out) const override { out = s; return has; }
-        svc::ImuStats stats() const override { return st; }
+        bool latest(device::ImuSample& out) const override { out = s; return has; }
+        device::ImuStats stats() const override { return st; }
     } a, b;
     b.fail_start = true;
-    svc::IImu* list[] = {&a, &b};
+    device::IImu* list[] = {&a, &b};
     Ctx c;
     app::ImuBringup m(list, 2);
     CHECK(core::is_ok(m.on_init(c.ctx)));
@@ -230,7 +256,7 @@ TEST(imu_bringup_reports_samples_and_failures) {
     int seen = 0;
     for (const auto& e : c.rec.events) {
         bu::ImuSample ev{};
-        if (e.id != bu::kImuSample || !e.get(ev)) continue;
+        if (e.id != bu::kImuSample || !bu::get_record(e, ev)) continue;
         ++seen;
         if (ev.imu == 0) {
             CHECK(ev.flags == (bu::kImuFresh | bu::kImuEverReceived) && ev.rate_hz == 400 && ev.gyro[2] == 0.17f);
@@ -247,6 +273,7 @@ TEST(imu_bringup_reports_samples_and_failures) {
 }
 
 TEST(bringup_dialect_maps_events_and_messages) {
+    PoolScope pool;
     product::BringupDialect d;
     TxCapture tx;
     svc::EventBus bus;
@@ -259,25 +286,26 @@ TEST(bringup_dialect_maps_events_and_messages) {
 
     bu::ImuSample s{};
     s.imu = 1; s.type = 2; s.frames = 77; s.gyro[0] = 1.5f; s.accel[2] = -9.8f; s.rate_hz = 100; s.raw_len = 3; s.raw[2] = 0x5A;
-    d.on_event(svc::Event::make(bu::kImuSample, s), tx);
-    bu::GnssData g{};
-    g.len = 4;
-    std::memcpy(g.data, "$GPG", 4);
-    d.on_event(svc::Event::make(bu::kGnssRxData, g), tx);
-    bu::LoopbackStatus ls{};
-    ls.count = 12; ls.ok_mask = 0x0FFC; ls.pass[11] = 9; ls.role[0] = 1;
-    d.on_event(svc::Event::make(bu::kLoopbackStatus, ls), tx);
-    CHECK_EQ(tx.sent.size(), 3u);
-    if (tx.sent.size() == 3) {
+    d.on_event(bu::make_record(bu::kImuSample, s), tx);
+    const std::string gnss = "$GPG" + std::string(96, 'x');   // 100 byte -> 2 SERIAL_CONTROL (70 + 30)
+    d.on_event(svc::Event::make(bu::kGnssRxData, bu::GnssDataHeader{100}, svc::Buffer::copy_of(gnss.data(), gnss.size())), tx);
+    bu::PortResult pr[16]{};   // 16 cổng -> bản tin chỉ chở 12 cổng đầu
+    pr[11].pass = 9; pr[0].role = 1;
+    d.on_event(svc::Event::make(bu::kLoopbackStatus, bu::LoopbackHeader{0xFFFC, 0xFFFF, 16}, svc::Buffer::copy_of(pr, sizeof(pr))), tx);
+    d.on_event(svc::Event::make(bu::kStatusText, bu::StatusHeader{bu::Severity::Error}, svc::Buffer::copy_of("boom", 4)), tx);
+    CHECK_EQ(tx.sent.size(), 5u);
+    if (tx.sent.size() == 5) {
         const auto& p = tx.sent[0].payload;
         CHECK_EQ(tx.sent[0].id, product::msg::ImuData::kId);
         CHECK_EQ(mavlink::wire::get_u32(p.data(), 4), 77u);
         CHECK(mavlink::wire::get_f32(p.data(), 12) == 1.5f && mavlink::wire::get_f32(p.data(), 32) == -9.8f);
         CHECK(p[44] == 1 && p[45] == 2 && p[47] == 3 && p[50] == 0x5A);
         const auto& q = tx.sent[1].payload;   // SERIAL_CONTROL REPLY, device GPS1
-        CHECK(tx.sent[1].id == mavlink::SerialControl::kId && q[6] == 1 && q[7] == 1 && q[8] == 4 && q[9] == '$');
-        const auto& r = tx.sent[2].payload;
+        CHECK(tx.sent[1].id == mavlink::SerialControl::kId && q[6] == 1 && q[7] == 1 && q[8] == 70 && q[9] == '$');
+        CHECK(tx.sent[2].id == mavlink::SerialControl::kId && tx.sent[2].payload[8] == 30);
+        const auto& r = tx.sent[3].payload;
         CHECK(mavlink::wire::get_u32(r.data(), 44) == 9u && mavlink::wire::get_u16(r.data(), 96) == 0x0FFC && r[100] == 12 && r[101] == 1);
+        CHECK(tx.sent[4].id == mavlink::StatusText::kId && tx.sent[4].payload[0] == 3 && std::memcmp(&tx.sent[4].payload[1], "boom", 5) == 0);
     }
 
     // OUTPUT_SET -> kOutputSetRequest
@@ -298,8 +326,9 @@ TEST(bringup_dialect_maps_events_and_messages) {
     m.msgid = mavlink::SerialControl::kId;
     sc.pack(m.payload);
     d.on_message(m, services, tx);
-    bu::GnssTxRequest req{};
-    CHECK(rec.events.back().id == bu::kGnssTxRequest && rec.events.back().get(req) && req.len == 2 && req.baudrate == 9600);
+    bu::GnssTxHeader req{};
+    CHECK(rec.events.back().id == bu::kGnssTxRequest && rec.events.back().get(req) && req.baudrate == 9600 &&
+          rec.events.back().buffer.size() == 2 && rec.events.back().buffer.data()[0] == 'O');
     const std::size_t n = rec.events.size();
     sc.flags = mavlink::SERIAL_CONTROL_FLAG_REPLY;
     sc.pack(m.payload);

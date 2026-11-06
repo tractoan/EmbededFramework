@@ -43,9 +43,9 @@ void LedService::tick(std::uint64_t now) {
     }
 }
 
-core::Status LedService::start() {
+core::Status LedService::start(const osal::ThreadConfig& task) {
     running_ = true;
-    return thread_.start(osal::ThreadConfig{"led", osal::Priority::Low, 1024, nullptr},
+    return thread_.start(task,
                          &osal::Thread::invoke<LedService, &LedService::run>, this);
 }
 

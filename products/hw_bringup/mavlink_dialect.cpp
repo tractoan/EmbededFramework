@@ -24,7 +24,7 @@ void BringupDialect::on_event(const svc::Event& e, Sender& tx) {
     switch (e.id) {
         case bu::kBringupStatus: {
             bu::BringupStatus s{};
-            if (!e.get(s)) return;
+            if (!bu::get_record(e, s)) return;
             msg::BringupStatus m;
             m.time_boot_ms  = s.uptime_ms;
             m.gnss_rx_bytes = s.gnss_rx_bytes;
@@ -38,17 +38,22 @@ void BringupDialect::on_event(const svc::Event& e, Sender& tx) {
             return;
         }
         case bu::kLoopbackStatus: {
-            bu::LoopbackStatus s{};
-            if (!e.get(s)) return;
+            bu::LoopbackHeader h{};
+            if (!e.get(h) || e.buffer.size() != h.count * sizeof(bu::PortResult)) return;
             msg::SerialLoopbackStatus m;
-            static_assert(msg::SerialLoopbackStatus::kPorts == bu::kMaxSerial, "port count mismatch");
-            std::memcpy(m.pass_count, s.pass, sizeof(m.pass_count));
-            std::memcpy(m.fail_count, s.fail, sizeof(m.fail_count));
-            std::memcpy(m.role, s.role, sizeof(m.role));
-            std::memcpy(m.result, s.result, sizeof(m.result));
-            m.ok_mask     = s.ok_mask;
-            m.tested_mask = s.tested_mask;
-            m.port_count  = s.count;
+            const std::size_t n = h.count < msg::SerialLoopbackStatus::kPorts ? h.count : msg::SerialLoopbackStatus::kPorts;
+            for (std::size_t i = 0; i < n; ++i) {   // bản tin chứa tối đa 12 cổng
+                bu::PortResult r{};
+                std::memcpy(&r, e.buffer.data() + i * sizeof(r), sizeof(r));
+                m.pass_count[i] = r.pass;
+                m.fail_count[i] = r.fail;
+                m.role[i]       = r.role;
+                m.result[i]     = r.result;
+            }
+            const auto mask = static_cast<std::uint16_t>((1u << n) - 1u);
+            m.ok_mask     = static_cast<std::uint16_t>(h.ok_mask & mask);
+            m.tested_mask = static_cast<std::uint16_t>(h.tested_mask & mask);
+            m.port_count  = static_cast<std::uint8_t>(n);
             tx.send(m);
             return;
         }
@@ -66,7 +71,7 @@ void BringupDialect::on_event(const svc::Event& e, Sender& tx) {
         }
         case bu::kImuSample: {
             bu::ImuSample s{};
-            if (!e.get(s)) return;
+            if (!bu::get_record(e, s)) return;
             msg::ImuData m;
             m.time_boot_ms = s.time_ms;
             m.frame_count  = s.frames;
@@ -85,22 +90,23 @@ void BringupDialect::on_event(const svc::Event& e, Sender& tx) {
             return;
         }
         case bu::kGnssRxData: {   // dữ liệu máy thu -> SERIAL_CONTROL trả lời (chuẩn MAVLink cho "serial passthrough")
-            bu::GnssData d{};
-            if (!e.get(d)) return;
-            SerialControl m;
-            m.device = SERIAL_CONTROL_DEV_GPS1;
-            m.flags  = SERIAL_CONTROL_FLAG_REPLY;
-            m.count  = d.len;
-            std::memcpy(m.data, d.data, d.len);
-            tx.send(m);
+            const std::uint8_t* p = e.buffer.data();
+            for (std::size_t off = 0, n = e.buffer.size(); off < n; off += SerialControl::kMaxData) {
+                SerialControl m;   // mỗi bản tin chở tối đa 70 byte
+                m.device = SERIAL_CONTROL_DEV_GPS1;
+                m.flags  = SERIAL_CONTROL_FLAG_REPLY;
+                m.count  = static_cast<std::uint8_t>(n - off < SerialControl::kMaxData ? n - off : SerialControl::kMaxData);
+                std::memcpy(m.data, p + off, m.count);
+                tx.send(m);
+            }
             return;
         }
         case bu::kStatusText: {
-            bu::StatusText t{};
-            if (!e.get(t)) return;
+            bu::StatusHeader h{};
+            if (!e.get(h)) return;
             StatusText m;
-            m.severity = static_cast<std::uint8_t>(t.severity);
-            std::memcpy(m.text, t.text, sizeof(m.text));
+            m.severity = static_cast<std::uint8_t>(h.severity);
+            std::memcpy(m.text, e.buffer.data(), e.buffer.size() < sizeof(m.text) ? e.buffer.size() : sizeof(m.text));
             tx.send(m);
             return;
         }
@@ -117,11 +123,13 @@ void BringupDialect::on_message(const Message& m, comm::Services& s, Sender& /*t
     if (m.msgid == SerialControl::kId) {
         const auto sc = SerialControl::unpack(m.payload);
         if (sc.device != SERIAL_CONTROL_DEV_GPS1 || (sc.flags & SERIAL_CONTROL_FLAG_REPLY)) return;
-        bu::GnssTxRequest req{};
-        req.baudrate = sc.baudrate;
-        req.len      = sc.count;
-        std::memcpy(req.data, sc.data, sc.count);
-        if (req.len > 0 || req.baudrate != 0) s.bus.publish(svc::Event::make(bu::kGnssTxRequest, req));
+        if (sc.count == 0 && sc.baudrate == 0) return;
+        svc::Buffer data;
+        if (sc.count > 0) {
+            data = svc::Buffer::copy_of(sc.data, sc.count);
+            if (!data) return;   // hết pool buffer: bỏ lệnh (GUI không nhận được phản hồi -> gửi lại)
+        }
+        s.bus.publish(svc::Event::make(bu::kGnssTxRequest, bu::GnssTxHeader{sc.baudrate}, std::move(data)));
     }
 }
 

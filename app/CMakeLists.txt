@@ -1,21 +1,22 @@
-# Application Framework: vòng đời module, định tuyến event, state machine, khởi động hệ thống.
-add_library(ep_app_framework STATIC
-  framework/src/module_manager.cpp
-  framework/src/system.cpp)
-target_include_directories(ep_app_framework PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/framework/include)
-target_link_libraries(ep_app_framework PUBLIC ep_services ep_comm)
+# Application Runtime: môi trường chạy module nghiệp vụ – vòng đời, định tuyến event, tick,
+# state machine, khởi động hệ thống.
+add_library(ep_app_runtime STATIC
+  runtime/src/module_manager.cpp
+  runtime/src/system.cpp)
+target_include_directories(ep_app_runtime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/runtime/include)
+target_link_libraries(ep_app_runtime PUBLIC ep_services ep_comm)
 
-# Business modules: thư viện module nghiệp vụ tái sử dụng giữa các sản phẩm.
-add_library(ep_modules STATIC
-  modules/temperature_monitor/temperature_monitor.cpp
-  modules/alarm_controller/alarm_controller.cpp)
-target_include_directories(ep_modules PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/modules)
-target_link_libraries(ep_modules PUBLIC ep_app_framework)
+# Business: thư viện module nghiệp vụ tái sử dụng giữa các sản phẩm.
+add_library(ep_business STATIC
+  business/temperature_monitor/temperature_monitor.cpp
+  business/alarm_controller/alarm_controller.cpp)
+target_include_directories(ep_business PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/business)
+target_link_libraries(ep_business PUBLIC ep_app_runtime)
 
-# Nhóm module bring-up phần cứng (serial/GNSS, I/O số, IMU). Event payload tới 128 byte nên chỉ
-# biên dịch khi sản phẩm link tới (EXCLUDE_FROM_ALL) và đặt EP_CFG_EVENT_PAYLOAD_SIZE >= 128.
-add_library(ep_modules_bringup STATIC EXCLUDE_FROM_ALL
-  modules/serial_bringup/serial_bringup.cpp
-  modules/io_bringup/io_bringup.cpp
-  modules/imu_bringup/imu_bringup.cpp)
-target_link_libraries(ep_modules_bringup PUBLIC ep_modules)
+# Nhóm module bring-up phần cứng (serial/GNSS, I/O số, IMU) – dùng bởi products/hw_bringup.
+# Dữ liệu lớn đi qua Event::buffer (svc::Buffer) nên không cần nới EP_CFG_EVENT_PAYLOAD_SIZE.
+add_library(ep_business_bringup STATIC
+  business/serial_bringup/serial_bringup.cpp
+  business/io_bringup/io_bringup.cpp
+  business/imu_bringup/imu_bringup.cpp)
+target_link_libraries(ep_business_bringup PUBLIC ep_business)

@@ -1,5 +1,5 @@
 # Ánh xạ phần cứng cho firmware hw_bringup (platform linux_cpu). Dùng: EP_BOARD_CONF=/etc/ep_board.conf
-# Ghi đè bảng mặc định trong hal/ports/linux_cpu/board_config.hpp; biến môi trường EP_SERIAL3=... ưu tiên hơn file.
+# Ghi đè bảng mặc định trong platform/hal/ports/linux_cpu/board_config.hpp; biến môi trường EP_SERIAL3=... ưu tiên hơn file.
 # "none" = không có trên bo mạch.
 
 # Serial (chỉ số logic 0..11). serial0 = phần mềm giao diện (MAVLink), serial1 = máy thu GNSS.

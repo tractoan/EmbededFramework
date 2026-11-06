@@ -16,16 +16,28 @@ Firmware chạy trên **CPU nhúng (Linux)** để kiểm tra bo mạch, báo k�
 
 ```
  products/hw_bringup   product.cpp (lắp ráp) · bringup_config.hpp (ánh xạ cổng/IMU) · mavlink_dialect.cpp (Event <-> bản tin)
- app/modules           SerialBringup (loopback + phát hiện GNSS) · IoBringup · ImuBringup   (chỉ nói chuyện qua Event/Param)
- middleware/mavlink    MavlinkProtocol: khung v1/v2, heartbeat, PARAM_* <-> ParamStore, COMMAND_LONG/ACK, IDialect
- services              SerialPortBank (thread/cổng: Loopback|Stream|External) · GpioInput/OutputBank · HdlcImu + ImuFormat
- hal                   IBoard::serial(i) / digital_input(i) / digital_output(i) / hdlc(i) · IHdlcPort
+ app/business          SerialBringup (loopback + phát hiện GNSS) · IoBringup · ImuBringup   (chỉ nói chuyện qua Event/Param)
+ communication/mavlink MavlinkProtocol: khung v1/v2, heartbeat, PARAM_* <-> ParamStore, COMMAND_LONG/ACK, IDialect
+ services              SerialPortBank (thread/cổng: Loopback|Stream|External) · HdlcImu (thread đọc khung)
+ platform/device       GpioInput/OutputBank (DI/DO) · ImuFormat + decode_imu_frame (giải mã theo bảng)
+ platform/hal          IBoard::serial(i) / digital_input(i) / digital_output(i) / hdlc(i) · IHdlcPort
    ports/linux_cpu     termios(+RS485) · GPIO chardev v2 · SyncLink/N_HDLC/chardev/AF_PACKET · file NV
    ports/linux_sim     12 serial (UDP/loopback/GNSS giả lập) · DI nối vòng DO · 2 IMU giả lập
+ platform/target       linux_cpu (khởi động trên CPU thật) · linux_sim
 ```
 
 Luồng: thread cổng/IMU → service (atomic, ring buffer) → module (thread `app`, tick 20 ms) → `EventBus`
 → `MavlinkProtocol` + `BringupDialect` → cổng giao diện. Chiều ngược lại: bản tin → Event yêu cầu → module.
+
+### Bộ nhớ & task (theo chính sách của framework)
+
+- **Không cấp phát động sau khởi động**: mọi dữ liệu lớn (mẫu IMU, bảng loopback, gói GNSS, STATUSTEXT) đi trong
+  `Event::buffer` lấy từ **pool tĩnh** khai báo ở `setup_buffers()` (64 B×32, 128 B×64, 256 B×16, 1024 B×16);
+  payload inline giữ mặc định 16 B. Hết pool → gói đó bị bỏ và được đếm (`sys buffers`, `gnss`).
+  Bộ đệm của phần cứng mô phỏng và port `linux_cpu` cũng là mảng cố định.
+- **Stack**: 17 task lấy stack từ vùng tĩnh `EP_CFG_STACK_POOL_BYTES` = 48 KB (dùng ~41 KB), `EP_CFG_MAX_THREADS` = 24.
+- **Priority** (0..15, `product.cpp`): IMU 12 · cổng GNSS 10 · kênh giao diện 9 · nghiệp vụ `app` 8 · cổng loopback 5 ·
+  console 4 · LED 4. Xem lúc chạy: `sys tasks`.
 
 ## Giao diện MAVLink
 
@@ -71,8 +83,8 @@ Kết quả: `PASS`, `TIMEOUT` (không nhận gì), `MISMATCH` (sai/thiếu byte
 
 ## IMU
 
-`svc::ImuFormat` mô tả khung bằng bảng (offset trường, độ rộng, endian, LSB, checksum, byte nhận dạng).
-Hai định dạng tham khảo trong `services/src/drivers/imu_format.cpp`:
+`device::ImuFormat` mô tả khung bằng bảng (offset trường, độ rộng, endian, LSB, checksum, byte nhận dạng).
+Hai định dạng tham khảo trong `platform/device/src/imu_format.cpp`:
 - `ln200`: 13 word 16-bit, Δv 2⁻¹⁴ m/s, Δθ 2⁻¹⁹ rad, 400 Hz, checksum tổng 16-bit.
 - `hg1700`: địa chỉ 0x0E + mã bản tin 0x01, Δθ 2⁻³³ rad, Δv 2⁻²⁷ ft/s (int32), 100 Hz.
 
@@ -99,12 +111,12 @@ tools/mavlink/bringup_gcs.py monitor
 
 Kịch bản mô phỏng: `EP_SIM_SERIAL1=loop` (không có máy thu → loopback PASS sau 5 s), `EP_SIM_SERIAL1=gnss:7000`
 (máy thu bật muộn), `EP_SIM_SERIAL5=broken`, `EP_SIM_SERIAL7=silent`, `EP_SIM_DI_STUCK=8` (DI3 kẹt), `EP_SIM_IMU_OFF=2` (mất IMU1).
-Chi tiết ở đầu `hal/ports/linux_sim/sim_bringup.hpp`.
+Chi tiết ở đầu `platform/hal/ports/linux_sim/sim_bringup.hpp`.
 
 Bo mạch thật (CPU Linux):
 
 ```bash
-cmake -B build-cpu -DEP_PLATFORM=linux_cpu -DEP_PRODUCT=hw_bringup
+cmake -B build-cpu -DEP_TARGET=linux_cpu -DEP_PRODUCT=hw_bringup
 ```
 ```bash
 cmake --build build-cpu -j
@@ -130,13 +142,14 @@ gnss [send <text> | baud <bps>]  trạng thái máy thu, gửi lệnh (tự thê
 io [set <ch> <0|1> | out <hex> | all <0|1>]   DI/DO
 imu                          thống kê khung, mẫu cuối, khung thô
 link list | set gcs <mavlink|cli|auto>
+sys tasks | buffers           task (priority, stack), pool buffer
 param list | set <n> <v> | save
 ```
 
 ## Cấu hình phần cứng
 
 - Chỉ số cổng & chức năng: `bringup_config.hpp` (cổng GCS/GNSS, baudrate, cặp loopback, invert DI, định dạng + cấu hình HDLC của IMU).
-- Thiết bị Linux tương ứng: `hal/ports/linux_cpu/board_config.hpp`, ghi đè lúc chạy bằng `EP_BOARD_CONF` hoặc `EP_SERIAL<i>`, `EP_DI<i>`,
+- Thiết bị Linux tương ứng: `platform/hal/ports/linux_cpu/board_config.hpp`, ghi đè lúc chạy bằng `EP_BOARD_CONF` hoặc `EP_SERIAL<i>`, `EP_DI<i>`,
   `EP_DO<i>`, `EP_HDLC<i>`, `EP_NVRAM` (ví dụ: `deploy/ep_board.conf.example`).
 - Backend HDLC: `synclink:` (card SyncLink, cấu hình MGSL + N_HDLC), `nhdlc:` (tty đã cấu hình đồng bộ), `chardev:` (driver trả 1 khung/`read`),
   `packet:` (netdev generic-HDLC, cần `CAP_NET_RAW`).

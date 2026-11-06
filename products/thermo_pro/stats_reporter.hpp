@@ -1,7 +1,9 @@
 #pragma once
 // Module nghiệp vụ RIÊNG của sản phẩm thermo_pro (không nằm trong thư viện dùng chung):
 // thống kê min/avg/max nhiệt độ và số lần cảnh báo theo chu kỳ cấu hình được.
+// Tiêu thụ kTemperatureBatch: đọc thẳng mảng mẫu trong Event::buffer (không copy dữ liệu).
 #include <climits>
+#include <cstring>
 
 #include "app/module.hpp"
 #include "app_events.hpp"
@@ -27,13 +29,20 @@ public:
     }
 
     void on_event(const svc::Event& e) override {
-        app::events::TemperatureSample s{};
+        app::events::TemperatureBatch batch{};
         svc::ParamChanged pc{};
-        if (e.id == app::events::kTemperature && e.get(s)) {
-            min_ = s.deci_celsius < min_ ? s.deci_celsius : min_;
-            max_ = s.deci_celsius > max_ ? s.deci_celsius : max_;
-            sum_ += s.deci_celsius;
-            ++n_;
+        if (e.id == app::events::kTemperatureBatch && e.get(batch)) {
+            const std::size_t n = e.buffer.size() / sizeof(std::int16_t);
+            for (std::size_t i = 0; i < n && i < batch.count; ++i) {
+                std::int16_t v = 0;
+                std::memcpy(&v, e.buffer.data() + i * sizeof(v), sizeof(v));
+                min_ = v < min_ ? v : min_;
+                max_ = v > max_ ? v : max_;
+                sum_ += v;
+                ++n_;
+            }
+            ++batches_;
+            bytes_ += e.buffer.size();
         } else if (e.id == app::events::kAlarmStateChanged) {
             ++transitions_;
         } else if (e.id == svc::evt::kParamChanged && e.get(pc) && pc.id == kPeriodParam) {
@@ -45,13 +54,15 @@ public:
 
     void on_tick(std::uint64_t /*now_ms*/) override {
         if (n_ == 0) return;
-        LOGI("stats", "T min/avg/max = %s / %s / %s C over %lu samples, %lu alarm transitions", utils::Fixed(min_, 1).c_str(),
-             utils::Fixed(static_cast<std::int32_t>(sum_ / n_), 1).c_str(), utils::Fixed(max_, 1).c_str(), static_cast<unsigned long>(n_),
-             static_cast<unsigned long>(transitions_));
+        LOGI("stats", "T min/avg/max = %s / %s / %s C over %lu samples (%lu batches, %lu B), %lu alarm transitions",
+             utils::Fixed(min_, 1).c_str(), utils::Fixed(static_cast<std::int32_t>(sum_ / n_), 1).c_str(),
+             utils::Fixed(max_, 1).c_str(), static_cast<unsigned long>(n_), static_cast<unsigned long>(batches_),
+             static_cast<unsigned long>(bytes_), static_cast<unsigned long>(transitions_));
         min_ = INT32_MAX;
         max_ = INT32_MIN;
         sum_ = 0;
-        n_ = transitions_ = 0;
+        n_ = transitions_ = batches_ = 0;
+        bytes_ = 0;
     }
 
 private:
@@ -60,7 +71,8 @@ private:
     std::uint32_t period_ = 10000;
     std::int32_t min_ = INT32_MAX, max_ = INT32_MIN;
     std::int64_t sum_ = 0;
-    std::uint32_t n_ = 0, transitions_ = 0;
+    std::uint32_t n_ = 0, transitions_ = 0, batches_ = 0;
+    std::size_t bytes_ = 0;
 };
 
 }  // namespace product

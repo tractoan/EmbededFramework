@@ -17,7 +17,8 @@ public:
     void set(LedId id, LedPattern pattern);
     LedPattern get(LedId id) const;
 
-    core::Status start();   // thread riêng, chu kỳ 50 ms
+    // Thread riêng, chu kỳ 50 ms. task: priority/stack (stack_mem == nullptr -> vùng stack tĩnh).
+    core::Status start(const osal::ThreadConfig& task = osal::ThreadConfig{"led", osal::Priority::Low, 1024, nullptr});
     void stop();
     void tick(std::uint64_t now_ms);   // public: có thể gọi từ super-loop (bare-metal) hoặc test
 

@@ -2,8 +2,8 @@
 #include <cmath>
 
 #include "mocks.hpp"
-#include "services/drivers/digital_io.hpp"
-#include "services/drivers/hdlc_imu.hpp"
+#include "device/digital_io.hpp"
+#include "services/hdlc_imu.hpp"
 #include "services/serial_port_bank.hpp"
 #include "test_framework.hpp"
 
@@ -17,6 +17,18 @@ std::uint16_t sum16(const std::uint8_t* p, std::size_t n) {
     std::uint32_t s = 0;
     for (std::size_t i = 0; i + 1 < n; i += 2) s += static_cast<std::uint32_t>(p[i] | (p[i + 1] << 8));
     return static_cast<std::uint16_t>(s);
+}
+// Stack tĩnh cho thread của SerialPortBank trong test: không lấy từ vùng stack dùng chung (cấp một chiều).
+alignas(8) std::uint8_t g_port_stacks[10][2048];
+svc::SerialPortBank::PortConfig port(hal::IUart* u, svc::SerialMode m, std::int8_t peer, int stack) {
+    svc::SerialPortBank::PortConfig c;
+    c.uart        = u;
+    c.mode        = m;
+    c.peer        = peer;
+    c.name        = "tser";
+    c.stack_bytes = sizeof(g_port_stacks[0]);
+    c.stack_mem   = g_port_stacks[stack];
+    return c;
 }
 bool near(float a, double b, double tol) { return std::fabs(static_cast<double>(a) - b) <= tol; }
 
@@ -38,14 +50,14 @@ TEST(serial_bank_loopback_stream_and_pairs) {
     svc::SerialPortBank bank;
     bank.set_test_timing(5, 10);
     using M = svc::SerialMode;
-    CHECK(core::is_ok(bank.add({&loop, {}, M::Loopback, -1, "t0"})));
-    CHECK(core::is_ok(bank.add({&silent, {}, M::Loopback, -1, "t1"})));
-    CHECK(core::is_ok(bank.add({&broken, {}, M::Loopback, -1, "t2"})));
-    CHECK(core::is_ok(bank.add({&corrupt, {}, M::Loopback, -1, "t3"})));
-    CHECK(core::is_ok(bank.add({&gnss, {}, M::Stream, -1, "t4"})));
-    CHECK(core::is_ok(bank.add({nullptr, {}, M::External, -1, "t5"})));
-    CHECK(core::is_ok(bank.add({&pa, {}, M::Loopback, 7, "t6"})));   // cặp nối chéo 6 <-> 7 (mỗi bên tự "im lặng")
-    CHECK(core::is_ok(bank.add({&pb, {}, M::Loopback, 6, "t7"})));
+    CHECK(core::is_ok(bank.add(port(&loop, M::Loopback, -1, 0))));
+    CHECK(core::is_ok(bank.add(port(&silent, M::Loopback, -1, 1))));
+    CHECK(core::is_ok(bank.add(port(&broken, M::Loopback, -1, 2))));
+    CHECK(core::is_ok(bank.add(port(&corrupt, M::Loopback, -1, 3))));
+    CHECK(core::is_ok(bank.add(port(&gnss, M::Stream, -1, 4))));
+    CHECK(core::is_ok(bank.add(port(nullptr, M::External, -1, 5))));
+    CHECK(core::is_ok(bank.add(port(&pa, M::Loopback, 7, 6))));   // cặp nối chéo 6 <-> 7 (mỗi bên tự "im lặng")
+    CHECK(core::is_ok(bank.add(port(&pb, M::Loopback, 6, 7))));
     CHECK(bank.set_mode(5, M::Loopback) == core::Status::InvalidArg);
     CHECK(core::is_ok(bank.start()));
 
@@ -103,8 +115,8 @@ TEST(serial_bank_cross_pair_pass) {
     b.peer = &a;
     svc::SerialPortBank bank;
     bank.set_test_timing(5, 20);
-    bank.add({&a, {}, svc::SerialMode::Loopback, 1, "a"});
-    bank.add({&b, {}, svc::SerialMode::Loopback, 0, "b"});
+    bank.add(port(&a, svc::SerialMode::Loopback, 1, 8));
+    bank.add(port(&b, svc::SerialMode::Loopback, 0, 9));
     bank.start();
     CHECK(mock::wait_until([&] { return bank.stats(0).pass >= 3 && bank.stats(1).pass >= 3; }, 3000));
     bank.stop();
@@ -112,17 +124,17 @@ TEST(serial_bank_cross_pair_pass) {
 }
 
 TEST(imu_decode_formats) {
-    svc::ImuSample s;
+    device::ImuSample s;
     auto f = ln200_frame();
-    CHECK(svc::decode_imu_frame(svc::imu_formats::kLn200, f.data(), f.size(), s) == svc::ImuDecodeResult::Ok);
+    CHECK(device::decode_imu_frame(device::imu_formats::kLn200, f.data(), f.size(), s) == device::ImuDecodeResult::Ok);
     CHECK(near(s.accel[2], -400.0 / 16384.0 * 400.0, 1e-4));            // -9.7656 m/s²
     CHECK(near(s.gyro[2], 229.0 / 524288.0 * 400.0, 1e-6));            // 0.1747 rad/s
     CHECK(near(s.gyro[0], 0.0, 1e-9) && s.status == 0x00A5 && std::isnan(s.temperature));
     CHECK_EQ(s.raw_len, 26);
 
     f[3] ^= 1;   // sai checksum
-    CHECK(svc::decode_imu_frame(svc::imu_formats::kLn200, f.data(), f.size(), s) == svc::ImuDecodeResult::BadChecksum);
-    CHECK(svc::decode_imu_frame(svc::imu_formats::kLn200, f.data(), 20, s) == svc::ImuDecodeResult::BadLength);
+    CHECK(device::decode_imu_frame(device::imu_formats::kLn200, f.data(), f.size(), s) == device::ImuDecodeResult::BadChecksum);
+    CHECK(device::decode_imu_frame(device::imu_formats::kLn200, f.data(), 20, s) == device::ImuDecodeResult::BadLength);
 
     // "hg1700": byte nhận dạng 0x0E/0x01, int32, checksum từ byte 2
     std::vector<std::uint8_t> h(30, 0);
@@ -130,17 +142,17 @@ TEST(imu_decode_formats) {
     le32(&h[10], 14990000);   // Δθ z
     le32(&h[22], -43180000);  // Δv z (ft/s * 2^27)
     le16(&h[28], sum16(&h[2], 26));
-    CHECK(svc::decode_imu_frame(svc::imu_formats::kHg1700, h.data(), h.size(), s) == svc::ImuDecodeResult::Ok);
+    CHECK(device::decode_imu_frame(device::imu_formats::kHg1700, h.data(), h.size(), s) == device::ImuDecodeResult::Ok);
     CHECK(near(s.gyro[2], 14990000 * std::ldexp(1.0, -33) * 100.0, 1e-6));
     CHECK(near(s.accel[2], -43180000 * std::ldexp(1.0, -27) * 0.3048 * 100.0, 1e-3));
     h[1] = 0x02;   // bản tin khác (vd. bản tin điều khiển) -> không phải dữ liệu
-    CHECK(svc::decode_imu_frame(svc::imu_formats::kHg1700, h.data(), h.size(), s) == svc::ImuDecodeResult::NotDataMessage);
+    CHECK(device::decode_imu_frame(device::imu_formats::kHg1700, h.data(), h.size(), s) == device::ImuDecodeResult::NotDataMessage);
 }
 
 TEST(hdlc_imu_driver_counters_and_software_fcs) {
     svc::HdlcImu imu;
     svc::HdlcImu::Config c;
-    c.format       = &svc::imu_formats::kLn200;
+    c.format       = &device::imu_formats::kLn200;
     c.software_fcs = true;
     CHECK(imu.init(nullptr, c) == core::Status::NotSupported);   // board không có cổng
     CHECK(std::string(imu.format_name()) == "ln200");
@@ -161,18 +173,18 @@ TEST(hdlc_imu_driver_counters_and_software_fcs) {
     imu.process_frame(g.data(), g.size(), ok, t);
     imu.process_frame(f.data(), f.size() - 3, ok, t);                               // ngắn -> FCS sai
     imu.process_frame(nullptr, 0, ok, t + 300);                                     // hết cửa sổ 1 s
-    const svc::ImuStats st = imu.stats();
+    const device::ImuStats st = imu.stats();
     CHECK_EQ(st.frames, 400u);
     CHECK_EQ(st.crc_errors, 3u);
     CHECK(st.rate_hz >= 350 && st.rate_hz <= 450);
-    svc::ImuSample s;
+    device::ImuSample s;
     CHECK(imu.latest(s) && s.status == 0x00A5);
 }
 
 TEST(digital_io_banks) {
     mock::Gpio o[3], i[3];
-    svc::GpioOutputBank out;
-    svc::GpioInputBank in;
+    device::GpioOutputBank out;
+    device::GpioInputBank in;
     for (auto& p : o) out.add(&p);
     for (auto& p : i) in.add(&p);
     CHECK(out.add(nullptr) == core::Status::InvalidArg);

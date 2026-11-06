@@ -242,7 +242,7 @@ TEST(mavlink_auto_detect_on_link) {
     mavlink::MavlinkProtocol mav(dialect);
     comm::CliProtocol cli(false, "> ");
     mock::ScriptedStream port;
-    CHECK(core::is_ok(links.add_channel("gcs", &port, {&mav, &cli}, comm::proto::kAuto)));
+    CHECK(core::is_ok(links.add_channel("gcs", &port, {&mav, &cli}, comm::proto::kAuto, osal::Priority::Normal, 1024)));
     CHECK(core::is_ok(links.start()));
 
     mavlink::Heartbeat hb;

@@ -65,6 +65,10 @@ public:
         SerialMode mode = SerialMode::Off;     // chế độ ban đầu
         std::int8_t peer = -1;                 // Loopback nối chéo với cổng này (-1: giắc trên chính cổng)
         const char* name = "ser";              // tên thread
+        // Task của cổng (không dùng với External). stack_mem == nullptr -> vùng stack tĩnh lúc khởi động.
+        osal::Priority priority = osal::Priority::Normal;
+        std::size_t stack_bytes = 2048;
+        void* stack_mem         = nullptr;
     };
 
     core::Status add(const PortConfig& cfg);

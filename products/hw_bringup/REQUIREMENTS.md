@@ -142,6 +142,8 @@
 | CON-03 | Ánh xạ thiết bị Linux đổi được lúc chạy, không cần build lại (`EP_BOARD_CONF`, `EP_SERIAL<i>`…). | Đã làm |
 | CON-04 | Có unit test cho logic quan trọng (phát hiện GNSS 5 s, loopback, giải mã IMU, MAVLink). | Đã làm |
 | CON-05 | Chạy như dịch vụ systemd, tự khởi động lại. | Đã làm |
+| CON-06 | Không cấp phát heap sau khởi động (bộ chặn heap của framework); dữ liệu lớn dùng `svc::Buffer` + pool tĩnh. | Đã làm |
+| CON-07 | Priority và stack của từng task cấu hình được (IMU 12, GNSS 10, giao diện 9, app 8, loopback 5, console 4). | Đã làm |
 
 ---
 
@@ -150,6 +152,7 @@
 | Ngày | Người | Thay đổi |
 |---|---|---|
 | 2026-11-03 | | Bản đầu: 12 serial (1 GUI, 1 GNSS, 10 loopback), GNSS 5 s → loopback, 20 DI / 20 DO, 2 IMU SDLC/HDLC, MAVLink. |
+| 2026-11-06 | | Nâng cấp theo framework mới (nhánh main): cấu trúc platform/communication/app.business, target `linux_cpu`, Event + Buffer, CON-06, CON-07. |
 | | | |
 
 ---

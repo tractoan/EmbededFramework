@@ -6,7 +6,7 @@
 #include <cstdint>
 
 #include "hal/hdlc.hpp"
-#include "services/drivers/imu.hpp"
+#include "device/imu.hpp"
 
 namespace product::hw {
 
@@ -27,7 +27,7 @@ inline constexpr std::uint32_t kInputInvertMask = 0;   // bit = 1: kênh tích c
 
 // ---------------------------------------------------------------- IMU (SDLC/HDLC)
 inline constexpr std::size_t kImuCount = 2;
-inline const svc::ImuFormat* const kImuFormat[kImuCount] = {&svc::imu_formats::kLn200, &svc::imu_formats::kHg1700};
+inline const device::ImuFormat* const kImuFormat[kImuCount] = {&device::imu_formats::kLn200, &device::imu_formats::kHg1700};
 
 inline hal::HdlcConfig imu_port_config(std::size_t /*imu*/) {
     hal::HdlcConfig c;

@@ -117,7 +117,7 @@ core::Status SerialPortBank::start() {
     for (std::size_t i = 0; i < count_; ++i) {
         Port& p = ports_[i];
         if (p.mode.load() == SerialMode::External) continue;
-        const core::Status st = p.thread.start(osal::ThreadConfig{p.cfg.name, osal::Priority::Normal, 4096, nullptr},
+        const core::Status st = p.thread.start(osal::ThreadConfig{p.cfg.name, p.cfg.priority, p.cfg.stack_bytes, p.cfg.stack_mem},
                                                &osal::Thread::invoke<Port, &Port::run>, &p);
         if (!core::is_ok(st)) return st;
     }
