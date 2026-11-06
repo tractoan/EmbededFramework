@@ -10,15 +10,15 @@
 #   - Bật USART2 (console) và USART3 (Aux: RS485/telemetry), I2C1 (cảm biến)
 #   - Dùng TIMx làm timebase cho HAL (SysTick dành cho FreeRTOS)
 #   - main.c của CubeMX bị loại bỏ; SystemClock_Config() copy sang
-#     target/stm32f4_freertos/clock_config.c
+#     platform/target/stm32f4_freertos/clock_config.c
 #   - FreeRTOSConfig.h: configSUPPORT_STATIC_ALLOCATION=1, configSUPPORT_DYNAMIC_ALLOCATION=1
 enable_language(ASM)
 
 set(EP_OSAL_PORT freertos)
 set(EP_HAL_PORT  stm32f4)
 set(EP_MAIN_SOURCE
-    ${PROJECT_SOURCE_DIR}/target/stm32f4_freertos/main.cpp
-    ${PROJECT_SOURCE_DIR}/target/stm32f4_freertos/clock_config.c)
+    ${PROJECT_SOURCE_DIR}/platform/target/stm32f4_freertos/main.cpp
+    ${PROJECT_SOURCE_DIR}/platform/target/stm32f4_freertos/clock_config.c)
 set(EP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 
 set(EP_CUBE_DIR     "" CACHE PATH "CubeMX-generated project root (Core/, Drivers/)")

@@ -89,8 +89,11 @@ EmbededFramework/
 │   ├── hal/
 │   │   ├── include/hal/        # gpio, uart, i2c, storage, board
 │   │   └── ports/{linux_sim,stm32f4}/
-│   └── device/
-│       └── include/device/     # temperature_sensor (interface), tmp102 (driver)
+│   ├── device/
+│   │   └── include/device/     # temperature_sensor (interface), tmp102 (driver)
+│   └── target/                 # entry point main() theo nền tảng đích
+│       ├── linux/main.cpp
+│       └── stm32f4_freertos/   # main.cpp, clock_config.c
 ├── services/
 │   └── include/services/       # event_bus, param_store, command_service, logger, led_service
 ├── communication/
@@ -103,7 +106,6 @@ EmbededFramework/
 ├── products/
 │   ├── thermo_pro/             # 3 module, latch, StatsReporter, CLI + Modbus (modbus_map.cpp)
 │   └── thermo_lite/            # 2 module, chỉ CLI, cấu hình nhỏ cho MCU ít RAM
-├── target/{linux,stm32f4_freertos}/main.cpp     # entry point theo nền tảng đích
 ├── tools/modbus_udp_client.py  # client Modbus RTU-over-UDP để thử bản mô phỏng
 └── tests/                      # unit test host + mocks HAL/stream
 ```
@@ -286,13 +288,15 @@ cmake -B build-my -DEP_PRODUCT=my_product
 1. Tạo `platform/hal/ports/<board>/` hiện thực `IGpio/IUart/II2c/INvStorage` bằng SDK của chip.
 2. Hiện thực `IBoard` ánh xạ `GpioId::StatusLed` … sang chân vật lý, và `hal::board()`.
 3. Tạo `cmake/targets/<board>_<os>.cmake` đặt `EP_HAL_PORT=<board>`, `EP_OSAL_PORT`, `EP_MAIN_SOURCE`,
-   và entry point `target/<board>_<os>/main.cpp` (khởi tạo clock/ngoại vi của vendor, chạy `app::System`).
+   và entry point `platform/target/<board>_<os>/main.cpp` (khởi tạo clock/ngoại vi của vendor, chạy `app::System`).
    Build bằng `-DEP_TARGET=<board>_<os>`.
    ⇒ Services, App, Product **không đổi một dòng**.
 
-Phân biệt hai thư mục: `platform/` là **lớp phần mềm trừu tượng hóa nền tảng** (Core/OSAL/HAL/Device, có port
-cho từng OS/board); `target/` + `cmake/targets/` là **cấu hình build cho một nền tảng đích cụ thể**
-(chọn port nào, toolchain, entry point `main`).
+Mọi thứ phụ thuộc nền tảng nằm trong `platform/`: phần mềm trừu tượng hóa (Core/OSAL/HAL/Device, có port
+cho từng OS/board) và `platform/target/` – entry point `main` của từng nền tảng đích; `cmake/targets/` chọn
+port, toolchain và entry point cho mỗi target.
+`platform/target/*/main.cpp` là ngoại lệ duy nhất của quy tắc phụ thuộc: nó không thuộc thư viện `ep_*` nào
+mà được biên dịch thẳng vào executable `firmware`, nên được phép include `app/` để khởi động `app::System`.
 
 ### 6.4 Port sang hệ điều hành mới (Zephyr, ThreadX, CMSIS-RTOS2, ESP-IDF…)
 

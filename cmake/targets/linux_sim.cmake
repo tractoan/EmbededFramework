@@ -1,7 +1,7 @@
 # Nền tảng: Linux host + phần cứng mô phỏng (dùng để phát triển nghiệp vụ, CI, unit test)
 set(EP_OSAL_PORT posix)
 set(EP_HAL_PORT  linux_sim)
-set(EP_MAIN_SOURCE ${PROJECT_SOURCE_DIR}/target/linux/main.cpp)
+set(EP_MAIN_SOURCE ${PROJECT_SOURCE_DIR}/platform/target/linux/main.cpp)
 
 find_package(Threads REQUIRED)
 set(EP_OSAL_PORT_LIBS Threads::Threads)
