@@ -14,7 +14,7 @@ namespace app {
 
 using ProductSetupFn = core::Status (*)(ProductSetup& setup);
 
-// Composition Root: nơi DUY NHẤT "lắp ráp" Foundation + Services + Communication + Business.
+// Composition Root: nơi DUY NHẤT "lắp ráp" Platform + Services + Communication + Business.
 // Trình tự boot:
 //   board.init -> logger -> services -> link manager -> devices
 //   -> product::setup (module + kênh/giao thức) -> modules.on_init

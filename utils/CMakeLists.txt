@@ -1,5 +1,5 @@
 # Utils: thuật toán & cấu trúc dữ liệu thuần (CRC, fixed-point, ring buffer...).
-# Hoàn toàn độc lập (chỉ thư viện chuẩn C++) -> mọi lớp, kể cả foundation, đều được dùng.
+# Hoàn toàn độc lập (chỉ thư viện chuẩn C++) -> mọi lớp, kể cả platform, đều được dùng.
 add_library(ep_utils STATIC
   src/crc.cpp
   src/fixed_point.cpp)

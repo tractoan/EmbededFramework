@@ -1,6 +1,6 @@
 # Embedded Platform – Kiến trúc phần mềm nhúng C++ đa nền tảng
 
-Bộ khung firmware C++17 phân lớp rõ ràng: **Foundation (Core / OSAL / HAL / Device) → Services → Communication → Application (Framework & Business)**.
+Bộ khung firmware C++17 phân lớp rõ ràng: **Platform (Core / OSAL / HAL / Device) → Services → Communication → Application (Framework & Business)**.
 Mục tiêu:
 
 - **Chuyển nền tảng** (MCU, board, RTOS, Linux) mà **không sửa** code nghiệp vụ.
@@ -28,7 +28,7 @@ Mục tiêu:
 │ SERVICES (services/)                                                   │
 │  EventBus · ParamStore(NV+CRC) · CommandService(bảng lệnh) · Logger    │
 │  LedService                                                            │
-╞════════════════════════ FOUNDATION (foundation/) ══════════════════════╡
+╞═════════════════════════ PLATFORM (platform/) ═════════════════════════╡
 │ DEVICE (device/)  thiết bị NGOÀI chip: Tmp102 : ITemperatureSensor     │
 ├──────────────────────────────────┬─────────────────────────────────────┤
 │ OSAL (osal/)                     │ HAL (hal/)  ngoại vi TRÊN chip      │
@@ -46,10 +46,10 @@ Mục tiêu:
 | Lớp | Trách nhiệm | KHÔNG được làm | Cơ chế đa hình |
 |---|---|---|---|
 | **Utils** | Thuật toán & cấu trúc dữ liệu thuần: CRC, định dạng fixed-point, ring buffer | Phụ thuộc bất kỳ thư mục nào khác của dự án | – (hàm/template thuần) |
-| **Foundation › Core** | Kiểu nền tảng: mã lỗi, cấu hình tĩnh, NonCopyable, macro compiler | Phụ thuộc bất kỳ thứ gì (trừ utils) | – |
-| **Foundation › OSAL** | Thread, mutex, semaphore, queue, thời gian, vùng găng | Truy cập phần cứng | **Link-time** (chọn port khi build) → zero-overhead |
-| **Foundation › HAL** | Ngoại vi **trên chip**: GPIO, UART, I2C, NV storage; `IBoard` ánh xạ ID logic → phần cứng | Gọi OSAL, chứa logic nghiệp vụ, biết tới sản phẩm | **Runtime** (interface ảo) → mock được, nhiều instance |
-| **Foundation › Device** | Driver thiết bị **ngoài chip** trên board (cảm biến, EEPROM, màn hình…) + interface theo loại thiết bị | Dùng services (EventBus, ParamStore, Logger), tự tạo thread, gọi API vendor | **Runtime** (`ITemperatureSensor`…) |
+| **Platform › Core** | Kiểu nền tảng: mã lỗi, cấu hình tĩnh, NonCopyable, macro compiler | Phụ thuộc bất kỳ thứ gì (trừ utils) | – |
+| **Platform › OSAL** | Thread, mutex, semaphore, queue, thời gian, vùng găng | Truy cập phần cứng | **Link-time** (chọn port khi build) → zero-overhead |
+| **Platform › HAL** | Ngoại vi **trên chip**: GPIO, UART, I2C, NV storage; `IBoard` ánh xạ ID logic → phần cứng | Gọi OSAL, chứa logic nghiệp vụ, biết tới sản phẩm | **Runtime** (interface ảo) → mock được, nhiều instance |
+| **Platform › Device** | Driver thiết bị **ngoài chip** trên board (cảm biến, EEPROM, màn hình…) + interface theo loại thiết bị | Dùng services (EventBus, ParamStore, Logger), tự tạo thread, gọi API vendor | **Runtime** (`ITemperatureSensor`…) |
 | **Services** | Dịch vụ hệ thống dùng chung: event bus, tham số, bảng lệnh, log, LED | Chứa quy tắc nghiệp vụ của sản phẩm; gọi API vendor trực tiếp | Interface (`ILogSink`, `ICommandHandler`) |
 | **Communication** | Truyền thông: kênh, giao thức (CLI, Modbus…), chọn/đổi giao thức lúc chạy | Biết tới module nghiệp vụ cụ thể (chỉ dùng Event/Param qua bảng ánh xạ) | **Runtime** (`IByteStream`, `IProtocol`) |
 | **Application – Framework** | Vòng đời module, định tuyến event, lập lịch tick, state machine, boot | Chứa nghiệp vụ cụ thể | – |
@@ -59,7 +59,7 @@ Mục tiêu:
 ### Quy tắc phụ thuộc (được CMake ép buộc)
 
 ```
-                 ┌──────────── foundation ────────────┐
+                 ┌───────────── platform ─────────────┐
 utils ◄── core ◄─┤ osal ◄──┐                          │
                  │ hal  ◄──┴── device                 │
                  └────────────────┬───────────────────┘
@@ -77,11 +77,11 @@ Lớp dưới không bao giờ biết lớp trên; giao tiếp ngược lên ch�
 
 ```
 EmbededFramework/
-├── CMakeLists.txt              # EP_PLATFORM, EP_PRODUCT
-├── cmake/platforms/            # linux_sim.cmake, stm32f4_freertos.cmake  (chọn port)
+├── CMakeLists.txt              # EP_TARGET, EP_PRODUCT
+├── cmake/targets/              # linux_sim.cmake, stm32f4_freertos.cmake  (chọn port)
 ├── cmake/toolchains/           # arm-none-eabi.cmake
 ├── utils/include/utils/        # crc.hpp, fixed_point.hpp, ring_buffer.hpp  (độc lập)
-├── foundation/                 # TẦNG NỀN
+├── platform/                   # TẦNG NỀN TẢNG
 │   ├── core/include/core/      # status.hpp, config.hpp, noncopyable.hpp, compiler.hpp
 │   ├── osal/
 │   │   ├── include/osal/       # API trung lập: thread, mutex, semaphore, queue, time, critical
@@ -103,7 +103,7 @@ EmbededFramework/
 ├── products/
 │   ├── thermo_pro/             # 3 module, latch, StatsReporter, CLI + Modbus (modbus_map.cpp)
 │   └── thermo_lite/            # 2 module, chỉ CLI, cấu hình nhỏ cho MCU ít RAM
-├── platform/{linux,stm32f4_freertos}/main.cpp   # entry point theo nền tảng
+├── target/{linux,stm32f4_freertos}/main.cpp     # entry point theo nền tảng đích
 ├── tools/modbus_udp_client.py  # client Modbus RTU-over-UDP để thử bản mô phỏng
 └── tests/                      # unit test host + mocks HAL/stream
 ```
@@ -283,28 +283,34 @@ cmake -B build-my -DEP_PRODUCT=my_product
 
 ### 6.3 Port sang board mới (cùng OS)
 
-1. Tạo `foundation/hal/ports/<board>/` hiện thực `IGpio/IUart/II2c/INvStorage` bằng SDK của chip.
+1. Tạo `platform/hal/ports/<board>/` hiện thực `IGpio/IUart/II2c/INvStorage` bằng SDK của chip.
 2. Hiện thực `IBoard` ánh xạ `GpioId::StatusLed` … sang chân vật lý, và `hal::board()`.
-3. Tạo `cmake/platforms/<board>_<os>.cmake` đặt `EP_HAL_PORT=<board>`.
+3. Tạo `cmake/targets/<board>_<os>.cmake` đặt `EP_HAL_PORT=<board>`, `EP_OSAL_PORT`, `EP_MAIN_SOURCE`,
+   và entry point `target/<board>_<os>/main.cpp` (khởi tạo clock/ngoại vi của vendor, chạy `app::System`).
+   Build bằng `-DEP_TARGET=<board>_<os>`.
    ⇒ Services, App, Product **không đổi một dòng**.
+
+Phân biệt hai thư mục: `platform/` là **lớp phần mềm trừu tượng hóa nền tảng** (Core/OSAL/HAL/Device, có port
+cho từng OS/board); `target/` + `cmake/targets/` là **cấu hình build cho một nền tảng đích cụ thể**
+(chọn port nào, toolchain, entry point `main`).
 
 ### 6.4 Port sang hệ điều hành mới (Zephyr, ThreadX, CMSIS-RTOS2, ESP-IDF…)
 
-1. Tạo `foundation/osal/ports/<os>/include/osal_port_types.hpp` – khai báo `MutexHandle`, `SemaphoreHandle`, `ThreadHandle`.
-2. Tạo `foundation/osal/ports/<os>/osal_<os>.cpp` – hiện thực các hàm trong `foundation/osal/include/osal/*.hpp`
+1. Tạo `platform/osal/ports/<os>/include/osal_port_types.hpp` – khai báo `MutexHandle`, `SemaphoreHandle`, `ThreadHandle`.
+2. Tạo `platform/osal/ports/<os>/osal_<os>.cpp` – hiện thực các hàm trong `platform/osal/include/osal/*.hpp`
    (tham khảo `osal_freertos.cpp`, ~100 dòng).
-3. Đặt `EP_OSAL_PORT=<os>` trong file platform. `Queue<T,N>` tự động hoạt động vì được viết trên Mutex/Semaphore.
+3. Đặt `EP_OSAL_PORT=<os>` trong file target (`cmake/targets/*.cmake`). `Queue<T,N>` tự động hoạt động vì được viết trên Mutex/Semaphore.
 
 ### 6.5 Thêm tiện ích dùng chung
 
 Thuật toán / cấu trúc dữ liệu **không phụ thuộc OS, phần cứng hay nghiệp vụ** (checksum, mã hóa
 COBS/base64, bộ lọc số, PID, bitfield...) đặt trong `utils/` (namespace `utils`), kèm test trong
-`tests/test_utils.cpp`. `utils/` không phụ thuộc thư mục nào khác nên mọi lớp, kể cả foundation, đều dùng được.
+`tests/test_utils.cpp`. `utils/` không phụ thuộc thư mục nào khác nên mọi lớp, kể cả platform, đều dùng được.
 Thứ gì cần mutex/thread (vd. `osal::Queue`) thuộc OSAL; thứ gì gắn với event/tham số thuộc Services.
 
 ### 6.6 Thêm loại thiết bị
 
-1. Interface theo loại thiết bị trong `foundation/device/include/device/` (vd. `device::IPressureSensor`).
+1. Interface theo loại thiết bị trong `platform/device/include/device/` (vd. `device::IPressureSensor`).
 2. Driver chip cụ thể (vd. `device::Bmp280`) chỉ dùng bus HAL (`hal::II2c`, `hal::ISpi`…), có thể dùng OSAL
    (delay, khóa bus dùng chung) và utils; **không** dùng services – báo lỗi bằng `core::Status`, không tự tạo thread.
 3. Thêm con trỏ interface vào `app::Devices`, khởi tạo driver trong `System::bring_up_devices()`.
@@ -360,12 +366,12 @@ link list | set <kênh> <off|auto|cli|modbus>   kênh truyền thông & đổi g
 ### STM32F407 + FreeRTOS
 
 ```bash
-cmake -B build-stm32 -DEP_PLATFORM=stm32f4_freertos \
+cmake -B build-stm32 -DEP_TARGET=stm32f4_freertos \
       -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/arm-none-eabi.cmake \
       -DEP_CUBE_DIR=/path/to/cubemx_project -DEP_FREERTOS_DIR=/path/to/FreeRTOS-Kernel
 ```
 
-Xem yêu cầu cấu hình CubeMX ở đầu `cmake/platforms/stm32f4_freertos.cmake`.
+Xem yêu cầu cấu hình CubeMX ở đầu `cmake/targets/stm32f4_freertos.cmake`.
 Port STM32 và FreeRTOS là **mẫu tham khảo** – chưa được biên dịch/kiểm thử trên phần cứng thật trong repo này.
 
 ---

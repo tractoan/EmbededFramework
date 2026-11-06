@@ -1,6 +1,6 @@
-#include "services/drivers/tmp102.hpp"
+#include "device/tmp102.hpp"
 
-namespace svc {
+namespace device {
 
 core::Status Tmp102::read_deci_celsius(std::int32_t& out) {
     if (bus_ == nullptr) return core::Status::NotSupported;
@@ -16,4 +16,4 @@ core::Status Tmp102::read_deci_celsius(std::int32_t& out) {
     return core::Status::Ok;
 }
 
-}  // namespace svc
+}  // namespace device

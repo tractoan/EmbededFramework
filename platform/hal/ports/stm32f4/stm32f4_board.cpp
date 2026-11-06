@@ -1,6 +1,6 @@
 // Board port: STM32F4-Discovery (STM32F407VG) trên STM32Cube HAL.
 // Handle peripheral (huart2, hi2c1) do CubeMX sinh ra trong usart.c / i2c.c.
-// Chỉ được biên dịch khi EP_PLATFORM=stm32f4_freertos.
+// Chỉ được biên dịch khi EP_TARGET=stm32f4_freertos.
 #include <cstring>
 
 #include "hal/board.hpp"

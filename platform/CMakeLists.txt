@@ -1,4 +1,4 @@
-# Foundation: tầng nền, mọi thứ phía trên đứng trên nó.
+# Platform: tầng nền, mọi thứ phía trên đứng trên nó.
 #   core/   kiểu nền tảng (Status, config, NonCopyable, macro compiler)
 #   osal/   trừu tượng hóa hệ điều hành   (port chọn lúc build: posix, freertos...)
 #   hal/    trừu tượng hóa ngoại vi TRÊN chip (port theo board: linux_sim, stm32f4...)
