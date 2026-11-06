@@ -1,5 +1,5 @@
 # Core: kiểu nền tảng của ngôn ngữ/hệ thống (Status, config, NonCopyable, macro compiler).
-# Thuật toán & cấu trúc dữ liệu dùng chung nằm ở utils/.
+# Thuật toán & cấu trúc dữ liệu thuần nằm ở utils/ (thư viện độc lập).
 add_library(ep_core INTERFACE)
 target_include_directories(ep_core INTERFACE
   ${CMAKE_CURRENT_SOURCE_DIR}/include

@@ -30,7 +30,7 @@ core::Status System::init(const char* product_name, ProductSetupFn setup) {
     leds_.bind(svc::LedId::Status, board_.gpio(hal::GpioId::StatusLed));
     leds_.bind(svc::LedId::Alarm, board_.gpio(hal::GpioId::AlarmLed));
 
-    // 3. Middleware truyền thông (kênh & giao thức do sản phẩm khai báo ở bước 5)
+    // 3. Communication: kênh & giao thức do sản phẩm khai báo ở bước 5
     console_stream_.attach(console);
     st = links_.init(comm_services_);
     if (!core::is_ok(st)) return st;

@@ -4,9 +4,9 @@
 #include "app/module_manager.hpp"
 #include "app/product.hpp"
 #include "comm/link_manager.hpp"
+#include "device/tmp102.hpp"
 #include "hal/board.hpp"
 #include "services/command_service.hpp"
-#include "services/drivers/tmp102.hpp"
 #include "services/logger.hpp"
 #include "services/param_cli.hpp"
 
@@ -14,7 +14,7 @@ namespace app {
 
 using ProductSetupFn = core::Status (*)(ProductSetup& setup);
 
-// Composition Root: nơi DUY NHẤT "lắp ráp" HAL + OSAL + Services + Middleware + Modules.
+// Composition Root: nơi DUY NHẤT "lắp ráp" Foundation + Services + Communication + Business.
 // Trình tự boot:
 //   board.init -> logger -> services -> link manager -> devices
 //   -> product::setup (module + kênh/giao thức) -> modules.on_init
@@ -49,7 +49,7 @@ private:
     svc::CommandService commands_;
     svc::ParamCli param_cli_;
     svc::LedService leds_;
-    svc::Tmp102 tmp102_;
+    device::Tmp102 tmp102_;
     Devices devices_;
     ModuleManager modules_;
     comm::UartStream console_stream_;

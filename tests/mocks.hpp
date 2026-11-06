@@ -14,7 +14,7 @@
 
 #include "hal/gpio.hpp"
 #include "hal/storage.hpp"
-#include "services/drivers/temperature_sensor.hpp"
+#include "device/temperature_sensor.hpp"
 #include "services/event.hpp"
 
 namespace mock {
@@ -55,7 +55,7 @@ public:
     std::array<std::uint8_t, 1024> mem{};
 };
 
-class TemperatureSensor final : public svc::ITemperatureSensor {
+class TemperatureSensor final : public device::ITemperatureSensor {
 public:
     core::Status read_deci_celsius(std::int32_t& out) override {
         if (fail) return core::Status::Timeout;

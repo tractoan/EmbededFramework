@@ -1,8 +1,8 @@
 #pragma once
 #include "hal/i2c.hpp"
-#include "services/drivers/temperature_sensor.hpp"
+#include "device/temperature_sensor.hpp"
 
-namespace svc {
+namespace device {
 
 // Driver TMP102 (TI) – chỉ dùng hal::II2c nên chạy được trên mọi board.
 class Tmp102 final : public ITemperatureSensor {
@@ -18,4 +18,4 @@ private:
     std::uint8_t addr_  = 0x48;
 };
 
-}  // namespace svc
+}  // namespace device

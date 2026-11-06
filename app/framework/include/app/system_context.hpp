@@ -1,6 +1,6 @@
 #pragma once
+#include "device/temperature_sensor.hpp"
 #include "services/command_service.hpp"
-#include "services/drivers/temperature_sensor.hpp"
 #include "services/event_bus.hpp"
 #include "services/led_service.hpp"
 #include "services/param_store.hpp"
@@ -9,7 +9,7 @@ namespace app {
 
 // Các thiết bị đã được khởi tạo (theo interface). nullptr = board không có.
 struct Devices {
-    svc::ITemperatureSensor* temperature = nullptr;
+    device::ITemperatureSensor* temperature = nullptr;
 };
 
 // Dependency Injection: mọi thứ module nghiệp vụ được phép dùng.

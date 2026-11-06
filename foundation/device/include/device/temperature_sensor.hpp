@@ -3,7 +3,7 @@
 
 #include "core/status.hpp"
 
-namespace svc {
+namespace device {
 
 // Interface thiết bị (Device Abstraction): nghiệp vụ phụ thuộc interface này,
 // không phụ thuộc chip cụ thể (TMP102, LM75, NTC+ADC, Modbus sensor...).
@@ -13,4 +13,4 @@ public:
     virtual core::Status read_deci_celsius(std::int32_t& out) = 0;   // đơn vị 0.1 °C
 };
 
-}  // namespace svc
+}  // namespace device

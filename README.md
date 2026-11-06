@@ -1,6 +1,6 @@
 # Embedded Platform – Kiến trúc phần mềm nhúng C++ đa nền tảng
 
-Bộ khung firmware C++17 phân lớp rõ ràng **HAL / OSAL / Service / Middleware / Application & Business**.
+Bộ khung firmware C++17 phân lớp rõ ràng: **Foundation (Core / OSAL / HAL / Device) → Services → Communication → Application (Framework & Business)**.
 Mục tiêu:
 
 - **Chuyển nền tảng** (MCU, board, RTOS, Linux) mà **không sửa** code nghiệp vụ.
@@ -14,41 +14,44 @@ Mục tiêu:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│ PRODUCT (products/<name>)   chọn module + cấu hình -> 1 firmware/sp    │
+│ PRODUCT (products/<name>)  chọn module + kênh + cấu hình -> 1 firmware │
 ├────────────────────────────────────────────────────────────────────────┤
-│ APPLICATION & BUSINESS (app/)                                          │
+│ APPLICATION (app/)                                                     │
 │  business/  TemperatureMonitor · AlarmController · <module của bạn>    │
 │  framework/ IModule · ModuleManager(Active Object) · StateMachine      │
 │             System (Composition Root) · SystemContext (DI)             │
 ├────────────────────────────────────────────────────────────────────────┤
-│ MIDDLEWARE (middleware/)  ngăn xếp truyền thông                        │
-│  comm/   IByteStream · IProtocol · LinkManager · CliProtocol           │
-│  modbus/ ModbusRtuProtocol · bảng ánh xạ Map   (mavlink/ ... sau này)  │
+│ COMMUNICATION (communication/)  ngăn xếp truyền thông                  │
+│  link/   IByteStream · IProtocol · LinkManager (chọn/đổi giao thức)    │
+│  cli/    CliProtocol     modbus/ ModbusRtuProtocol + Map   (mavlink/…) │
 ├────────────────────────────────────────────────────────────────────────┤
-│ SERVICE (services/)                                                    │
+│ SERVICES (services/)                                                   │
 │  EventBus · ParamStore(NV+CRC) · CommandService(bảng lệnh) · Logger    │
-│  LedService · Device drivers (Tmp102 : ITemperatureSensor)             │
+│  LedService                                                            │
+╞════════════════════════ FOUNDATION (foundation/) ══════════════════════╡
+│ DEVICE (device/)  thiết bị NGOÀI chip: Tmp102 : ITemperatureSensor     │
 ├──────────────────────────────────┬─────────────────────────────────────┤
-│ OSAL (osal/)                     │ HAL (hal/)                          │
+│ OSAL (osal/)                     │ HAL (hal/)  ngoại vi TRÊN chip      │
 │  Thread · Mutex · Semaphore      │  IGpio · IUart · II2c · INvStorage  │
 │  Queue<T,N> · time · Critical    │  IBoard (ID logic -> chân vật lý)   │
 │  ports: posix │ freertos │ ...   │  ports: linux_sim │ stm32f4 │ ...   │
 ├──────────────────────────────────┴─────────────────────────────────────┤
-│ UTILS (utils/) crc32/crc16 · fixed-point format · RingBuffer (SPSC)    │
-├────────────────────────────────────────────────────────────────────────┤
 │ CORE (core/)   Status · NonCopyable · config.hpp · compiler macros     │
 └────────────────────────────────────────────────────────────────────────┘
+ UTILS (utils/) – thư viện độc lập, mọi lớp đều dùng được:
+   crc32/crc16 · fixed-point format · RingBuffer (SPSC)
    Vendor SDK / Kernel: STM32Cube HAL, FreeRTOS, Zephyr, Linux, ESP-IDF...
 ```
 
 | Lớp | Trách nhiệm | KHÔNG được làm | Cơ chế đa hình |
 |---|---|---|---|
-| **Core** | Kiểu nền tảng: mã lỗi, cấu hình tĩnh, NonCopyable, macro compiler | Phụ thuộc bất kỳ thứ gì | – |
-| **Utils** | Thuật toán & cấu trúc dữ liệu thuần: CRC, định dạng fixed-point, ring buffer | Phụ thuộc OS, phần cứng, nghiệp vụ | – (hàm/template thuần) |
-| **HAL** | Trừu tượng ngoại vi: GPIO, UART, I2C, NV storage; `IBoard` ánh xạ ID logic → phần cứng | Gọi OSAL, chứa logic nghiệp vụ, biết tới sản phẩm | **Runtime** (interface ảo) → mock được, nhiều instance |
-| **OSAL** | Thread, mutex, semaphore, queue, thời gian, vùng găng | Truy cập phần cứng | **Link-time** (chọn port khi build) → zero-overhead |
-| **Service** | Dịch vụ dùng chung: event bus, tham số, bảng lệnh, log, LED, driver thiết bị | Chứa quy tắc nghiệp vụ của sản phẩm; gọi API vendor trực tiếp | Interface (`ITemperatureSensor`, `ILogSink`, `ICommandHandler`) |
-| **Middleware** | Truyền thông: kênh, giao thức (CLI, Modbus…), chọn/đổi giao thức lúc chạy | Biết tới module nghiệp vụ cụ thể (chỉ dùng Event/Param qua bảng ánh xạ) | **Runtime** (`IByteStream`, `IProtocol`) |
+| **Utils** | Thuật toán & cấu trúc dữ liệu thuần: CRC, định dạng fixed-point, ring buffer | Phụ thuộc bất kỳ thư mục nào khác của dự án | – (hàm/template thuần) |
+| **Foundation › Core** | Kiểu nền tảng: mã lỗi, cấu hình tĩnh, NonCopyable, macro compiler | Phụ thuộc bất kỳ thứ gì (trừ utils) | – |
+| **Foundation › OSAL** | Thread, mutex, semaphore, queue, thời gian, vùng găng | Truy cập phần cứng | **Link-time** (chọn port khi build) → zero-overhead |
+| **Foundation › HAL** | Ngoại vi **trên chip**: GPIO, UART, I2C, NV storage; `IBoard` ánh xạ ID logic → phần cứng | Gọi OSAL, chứa logic nghiệp vụ, biết tới sản phẩm | **Runtime** (interface ảo) → mock được, nhiều instance |
+| **Foundation › Device** | Driver thiết bị **ngoài chip** trên board (cảm biến, EEPROM, màn hình…) + interface theo loại thiết bị | Dùng services (EventBus, ParamStore, Logger), tự tạo thread, gọi API vendor | **Runtime** (`ITemperatureSensor`…) |
+| **Services** | Dịch vụ hệ thống dùng chung: event bus, tham số, bảng lệnh, log, LED | Chứa quy tắc nghiệp vụ của sản phẩm; gọi API vendor trực tiếp | Interface (`ILogSink`, `ICommandHandler`) |
+| **Communication** | Truyền thông: kênh, giao thức (CLI, Modbus…), chọn/đổi giao thức lúc chạy | Biết tới module nghiệp vụ cụ thể (chỉ dùng Event/Param qua bảng ánh xạ) | **Runtime** (`IByteStream`, `IProtocol`) |
 | **Application – Framework** | Vòng đời module, định tuyến event, lập lịch tick, state machine, boot | Chứa nghiệp vụ cụ thể | – |
 | **Application – Business** | Quy tắc nghiệp vụ (đo, cảnh báo, điều khiển...) | Include `hal/*`, `osal_port_types.hpp`, header vendor; tự tạo thread | Plug-in qua `IModule` |
 | **Product** | Lắp ráp module + kênh/giao thức + cấu hình mặc định cho từng sản phẩm | – | Chọn thư mục khi build |
@@ -56,9 +59,14 @@ Mục tiêu:
 ### Quy tắc phụ thuộc (được CMake ép buộc)
 
 ```
-core ◄── utils ◄── osal ◄──┐
-              ◄── hal  ◄──┴── services ◄── middleware(comm ◄ modbus) ◄── app_framework ◄── business ◄── product ◄── firmware(main)
+                 ┌──────────── foundation ────────────┐
+utils ◄── core ◄─┤ osal ◄──┐                          │
+                 │ hal  ◄──┴── device                 │
+                 └────────────────┬───────────────────┘
+                                  ▼
+            services ◄── communication(link ◄ cli, modbus) ◄── app_framework ◄── business ◄── product ◄── firmware(main)
 ```
+(mũi tên `A ◄── B`: B phụ thuộc A)
 
 Mỗi lớp chỉ `target_link_libraries` tới lớp ngay dưới → include sai lớp sẽ **lỗi biên dịch**.
 Lớp dưới không bao giờ biết lớp trên; giao tiếp ngược lên chỉ qua **callback/interface/event**.
@@ -72,20 +80,23 @@ EmbededFramework/
 ├── CMakeLists.txt              # EP_PLATFORM, EP_PRODUCT
 ├── cmake/platforms/            # linux_sim.cmake, stm32f4_freertos.cmake  (chọn port)
 ├── cmake/toolchains/           # arm-none-eabi.cmake
-├── core/include/core/          # status.hpp, config.hpp, noncopyable.hpp, compiler.hpp
-├── utils/include/utils/        # crc.hpp, fixed_point.hpp, ring_buffer.hpp
-├── osal/
-│   ├── include/osal/           # API trung lập: thread, mutex, semaphore, queue, time, critical
-│   └── ports/{posix,freertos}/ # osal_port_types.hpp + osal_<os>.cpp
-├── hal/
-│   ├── include/hal/            # gpio, uart, i2c, storage, board
-│   └── ports/{linux_sim,stm32f4}/
+├── utils/include/utils/        # crc.hpp, fixed_point.hpp, ring_buffer.hpp  (độc lập)
+├── foundation/                 # TẦNG NỀN
+│   ├── core/include/core/      # status.hpp, config.hpp, noncopyable.hpp, compiler.hpp
+│   ├── osal/
+│   │   ├── include/osal/       # API trung lập: thread, mutex, semaphore, queue, time, critical
+│   │   └── ports/{posix,freertos}/   # osal_port_types.hpp + osal_<os>.cpp
+│   ├── hal/
+│   │   ├── include/hal/        # gpio, uart, i2c, storage, board
+│   │   └── ports/{linux_sim,stm32f4}/
+│   └── device/
+│       └── include/device/     # temperature_sensor (interface), tmp102 (driver)
 ├── services/
-│   ├── include/services/       # event_bus, param_store, command_service, logger, led_service
-│   └── include/services/drivers/  # temperature_sensor (interface), tmp102 (driver)
-├── middleware/
-│   ├── comm/                   # byte_stream, protocol, link_manager, cli_protocol
-│   └── modbus/                 # modbus_map (bảng ánh xạ), modbus_rtu (slave)
+│   └── include/services/       # event_bus, param_store, command_service, logger, led_service
+├── communication/
+│   ├── link/                   # byte_stream, protocol, link_manager      (ep_comm)
+│   ├── cli/                    # cli_protocol                             (ep_proto_cli)
+│   └── modbus/                 # modbus_map (bảng ánh xạ), modbus_rtu     (ep_proto_modbus)
 ├── app/
 │   ├── framework/include/app/  # module, module_manager, state_machine, system, product
 │   └── business/               # module nghiệp vụ tái sử dụng + app_events.hpp, app_params.hpp
@@ -180,7 +191,7 @@ Mỗi giao thức chỉ là một *cách biểu diễn* khác của mô hình đ
 
 | Mức | Cách làm | Ví dụ trong repo |
 |---|---|---|
-| **Build** | Sản phẩm link thư viện giao thức nào thì chỉ giao thức đó có trong firmware | `thermo_pro` link `ep_proto_modbus`; `thermo_lite` không → không tốn Flash |
+| **Build** | Sản phẩm link thư viện giao thức nào thì chỉ giao thức đó có trong firmware | `thermo_pro` link `ep_proto_cli` + `ep_proto_modbus`; `thermo_lite` chỉ `ep_proto_cli` → không tốn Flash cho Modbus |
 | **Sản phẩm** | `product::setup()` khai báo kênh + danh sách giao thức được phép + mặc định | `console`: {modbus, cli} mặc định CLI; `aux`: {modbus, cli} mặc định Modbus |
 | **Runtime** | Tham số `comm.<kênh>` = `0` off, `1` auto, hoặc ID giao thức (`2` cli, `3` modbus, `4` mavlink); đổi bằng `link set`, `param set`, hoặc **qua chính giao thức** (holding register Modbus 6/7). `param save` để giữ sau khởi động lại | `link set aux cli` |
 | **Auto-detect** | `comm.<kênh> = 1`: kênh nghe dữ liệu đầu tiên, hỏi `probe()` của từng giao thức (bỏ qua rác ở đầu); im lặng 10 s thì nhận dạng lại | Cắm terminal → CLI; cắm Modbus master → Modbus |
@@ -261,7 +272,7 @@ private:
 
 ```
 products/my_product/
-├── CMakeLists.txt              # add_library(ep_product ...) + link ep_business (+ ep_proto_* cần dùng)
+├── CMakeLists.txt              # add_library(ep_product ...) + link ep_business + ep_proto_* cần dùng
 ├── config/product_config.hpp   # override EP_CFG_* (tùy chọn)
 └── product.cpp                 # product::name(), product::setup(): module + kênh/giao thức
 ```
@@ -272,15 +283,15 @@ cmake -B build-my -DEP_PRODUCT=my_product
 
 ### 6.3 Port sang board mới (cùng OS)
 
-1. Tạo `hal/ports/<board>/` hiện thực `IGpio/IUart/II2c/INvStorage` bằng SDK của chip.
+1. Tạo `foundation/hal/ports/<board>/` hiện thực `IGpio/IUart/II2c/INvStorage` bằng SDK của chip.
 2. Hiện thực `IBoard` ánh xạ `GpioId::StatusLed` … sang chân vật lý, và `hal::board()`.
 3. Tạo `cmake/platforms/<board>_<os>.cmake` đặt `EP_HAL_PORT=<board>`.
    ⇒ Services, App, Product **không đổi một dòng**.
 
 ### 6.4 Port sang hệ điều hành mới (Zephyr, ThreadX, CMSIS-RTOS2, ESP-IDF…)
 
-1. Tạo `osal/ports/<os>/include/osal_port_types.hpp` – khai báo `MutexHandle`, `SemaphoreHandle`, `ThreadHandle`.
-2. Tạo `osal/ports/<os>/osal_<os>.cpp` – hiện thực các hàm trong `osal/include/osal/*.hpp`
+1. Tạo `foundation/osal/ports/<os>/include/osal_port_types.hpp` – khai báo `MutexHandle`, `SemaphoreHandle`, `ThreadHandle`.
+2. Tạo `foundation/osal/ports/<os>/osal_<os>.cpp` – hiện thực các hàm trong `foundation/osal/include/osal/*.hpp`
    (tham khảo `osal_freertos.cpp`, ~100 dòng).
 3. Đặt `EP_OSAL_PORT=<os>` trong file platform. `Queue<T,N>` tự động hoạt động vì được viết trên Mutex/Semaphore.
 
@@ -288,18 +299,22 @@ cmake -B build-my -DEP_PRODUCT=my_product
 
 Thuật toán / cấu trúc dữ liệu **không phụ thuộc OS, phần cứng hay nghiệp vụ** (checksum, mã hóa
 COBS/base64, bộ lọc số, PID, bitfield...) đặt trong `utils/` (namespace `utils`), kèm test trong
-`tests/test_utils.cpp`. Mọi lớp từ OSAL/HAL trở lên đều dùng được.
+`tests/test_utils.cpp`. `utils/` không phụ thuộc thư mục nào khác nên mọi lớp, kể cả foundation, đều dùng được.
 Thứ gì cần mutex/thread (vd. `osal::Queue`) thuộc OSAL; thứ gì gắn với event/tham số thuộc Services.
 
 ### 6.6 Thêm loại thiết bị
 
-Định nghĩa interface thiết bị trong `services/include/services/drivers/` (vd. `IPressureSensor`), driver cụ thể
-dùng interface HAL, thêm con trỏ vào `app::Devices`, khởi tạo trong `System::bring_up_devices()`.
-Nghiệp vụ chỉ phụ thuộc interface → thay chip cảm biến không ảnh hưởng nghiệp vụ.
+1. Interface theo loại thiết bị trong `foundation/device/include/device/` (vd. `device::IPressureSensor`).
+2. Driver chip cụ thể (vd. `device::Bmp280`) chỉ dùng bus HAL (`hal::II2c`, `hal::ISpi`…), có thể dùng OSAL
+   (delay, khóa bus dùng chung) và utils; **không** dùng services – báo lỗi bằng `core::Status`, không tự tạo thread.
+3. Thêm con trỏ interface vào `app::Devices`, khởi tạo driver trong `System::bring_up_devices()`.
+
+Nghiệp vụ chỉ phụ thuộc interface → thay chip cảm biến không ảnh hưởng nghiệp vụ. HAL khác theo board,
+còn driver thiết bị giống nhau trên mọi board và có thể dùng lại ở dự án khác.
 
 ### 6.7 Thêm giao thức mới (vd. MAVLink, giao thức riêng)
 
-1. Tạo `middleware/<proto>/` với target `ep_proto_<proto>` link `ep_comm`; thư viện bên thứ ba (vd. header
+1. Tạo `communication/<proto>/` với target `ep_proto_<proto>` link `ep_comm`; thư viện bên thứ ba (vd. header
    MAVLink sinh từ XML) đặt ở `third_party/` và **chỉ** target này được include.
 2. Hiện thực `comm::IProtocol`: `id()` (giá trị ổn định, vd. `proto::kMavlink` hoặc `proto::kUserBase + n`),
    `attach/detach`, `on_rx` (parse), `poll` (heartbeat/timeout), `probe` (nhận dạng chặt chẽ, có CRC).
