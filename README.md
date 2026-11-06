@@ -60,13 +60,24 @@ Mục tiêu:
 
 ```
                  ┌───────────── platform ─────────────┐
-utils ◄── core ◄─┤ osal ◄──┐                          │
-                 │ hal  ◄──┴── device                 │
+utils ◄── core ◄─┤ osal ◄──┬── device                 │
+                 │ hal  ◄──┴── target                 │
                  └────────────────┬───────────────────┘
                                   ▼
-            services ◄── communication(link ◄ cli, modbus) ◄── app_framework ◄── business ◄── product ◄── firmware(main)
+            services ◄── communication(link ◄ cli, modbus) ◄── app_framework ◄── business ◄── product
+                                                                                                │
+                                         main.cpp (thư mục gốc) ◄── nối product + target ───────┘
 ```
 (mũi tên `A ◄── B`: B phụ thuộc A)
+
+`main.cpp` ở thư mục gốc là entry point **duy nhất**, giống nhau cho mọi target và sản phẩm:
+
+```cpp
+int main(int argc, char** argv) {
+    target::init(argc, argv);          // khởi động riêng của nền tảng đích
+    return target::run(&app_main);     // app_main: app::System + product::setup
+}
+```
 
 Mỗi lớp chỉ `target_link_libraries` tới lớp ngay dưới → include sai lớp sẽ **lỗi biên dịch**.
 Lớp dưới không bao giờ biết lớp trên; giao tiếp ngược lên chỉ qua **callback/interface/event**.
@@ -78,6 +89,7 @@ Lớp dưới không bao giờ biết lớp trên; giao tiếp ngược lên ch�
 ```
 EmbededFramework/
 ├── CMakeLists.txt              # EP_TARGET, EP_PRODUCT
+├── main.cpp                    # entry point duy nhất (mọi target, mọi sản phẩm)
 ├── cmake/targets/              # linux_sim.cmake, stm32f4_freertos.cmake  (chọn port)
 ├── cmake/toolchains/           # arm-none-eabi.cmake
 ├── utils/include/utils/        # crc.hpp, fixed_point.hpp, ring_buffer.hpp  (độc lập)
@@ -91,9 +103,10 @@ EmbededFramework/
 │   │   └── ports/{linux_sim,stm32f4}/
 │   ├── device/
 │   │   └── include/device/     # temperature_sensor (interface), tmp102 (driver)
-│   └── target/                 # entry point main() theo nền tảng đích
-│       ├── linux/main.cpp
-│       └── stm32f4_freertos/   # main.cpp, clock_config.c
+│   └── target/                 # khởi động theo nền tảng đích: target::init / run / stop_requested
+│       ├── include/target/target.hpp
+│       ├── linux_sim/          # tham số dòng lệnh, Ctrl+C, --run-for
+│       └── stm32f4_freertos/   # HAL_Init, clock, ngoại vi CubeMX, start scheduler, hook FreeRTOS
 ├── services/
 │   └── include/services/       # event_bus, param_store, command_service, logger, led_service
 ├── communication/
@@ -287,16 +300,15 @@ cmake -B build-my -DEP_PRODUCT=my_product
 
 1. Tạo `platform/hal/ports/<board>/` hiện thực `IGpio/IUart/II2c/INvStorage` bằng SDK của chip.
 2. Hiện thực `IBoard` ánh xạ `GpioId::StatusLed` … sang chân vật lý, và `hal::board()`.
-3. Tạo `cmake/targets/<board>_<os>.cmake` đặt `EP_HAL_PORT=<board>`, `EP_OSAL_PORT`, `EP_MAIN_SOURCE`,
-   và entry point `platform/target/<board>_<os>/main.cpp` (khởi tạo clock/ngoại vi của vendor, chạy `app::System`).
-   Build bằng `-DEP_TARGET=<board>_<os>`.
-   ⇒ Services, App, Product **không đổi một dòng**.
+3. Tạo `platform/target/<board>_<os>/` hiện thực `target::init()` (HAL vendor, clock, ngoại vi),
+   `target::run()` (gọi `app_main` trong ngữ cảnh đúng, vd. task + start scheduler) và `target::stop_requested()`.
+4. Tạo `cmake/targets/<board>_<os>.cmake` đặt `EP_HAL_PORT=<board>`, `EP_OSAL_PORT`, toolchain/cờ CPU.
+   Tên file phải trùng tên thư mục ở bước 3. Build bằng `-DEP_TARGET=<board>_<os>`.
+   ⇒ `main.cpp`, Services, App, Product **không đổi một dòng**.
 
-Mọi thứ phụ thuộc nền tảng nằm trong `platform/`: phần mềm trừu tượng hóa (Core/OSAL/HAL/Device, có port
-cho từng OS/board) và `platform/target/` – entry point `main` của từng nền tảng đích; `cmake/targets/` chọn
-port, toolchain và entry point cho mỗi target.
-`platform/target/*/main.cpp` là ngoại lệ duy nhất của quy tắc phụ thuộc: nó không thuộc thư viện `ep_*` nào
-mà được biên dịch thẳng vào executable `firmware`, nên được phép include `app/` để khởi động `app::System`.
+Mọi thứ phụ thuộc nền tảng nằm trong `platform/` (Core/OSAL/HAL/Device và khởi động `target/`);
+`cmake/targets/` chọn port, toolchain cho mỗi target. Không thư viện nào trong `platform/` include `app/` –
+việc nối nền tảng với ứng dụng chỉ diễn ra ở `main.cpp` thư mục gốc.
 
 ### 6.4 Port sang hệ điều hành mới (Zephyr, ThreadX, CMSIS-RTOS2, ESP-IDF…)
 

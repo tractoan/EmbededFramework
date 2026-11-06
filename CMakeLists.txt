@@ -24,8 +24,9 @@ if(NOT EXISTS ${EP_PRODUCT_DIR}/CMakeLists.txt)
   message(FATAL_ERROR "Unknown product '${EP_PRODUCT}'")
 endif()
 
-# Target file phải định nghĩa: EP_OSAL_PORT, EP_HAL_PORT, EP_MAIN_SOURCE
-# và có thể định nghĩa: EP_OSAL_PORT_LIBS, EP_HAL_PORT_LIBS, EP_TARGET_LIBS
+# Target file phải định nghĩa: EP_OSAL_PORT, EP_HAL_PORT
+# và có thể định nghĩa: EP_OSAL_PORT_LIBS, EP_HAL_PORT_LIBS, EP_TARGET_LIBS.
+# Mã khởi động của target (target::init/run) nằm ở platform/target/<EP_TARGET>/.
 if(NOT EXISTS ${PROJECT_SOURCE_DIR}/cmake/targets/${EP_TARGET}.cmake)
   message(FATAL_ERROR "Unknown target '${EP_TARGET}' (see cmake/targets/)")
 endif()
@@ -40,7 +41,7 @@ target_compile_options(ep_options INTERFACE
 
 # Thứ tự = thứ tự phụ thuộc. Quy tắc phụ thuộc được ép bởi target_link_libraries:
 #   utils (độc lập)
-#   platform(core <- osal, hal <- device) <- services <- communication <- app(framework, business) <- product <- firmware
+#   platform(core <- osal, hal <- device, target) <- services <- communication <- app(framework, business) <- product <- firmware
 add_subdirectory(utils)
 add_subdirectory(platform)
 add_subdirectory(services)
@@ -48,8 +49,9 @@ add_subdirectory(communication)
 add_subdirectory(app)
 add_subdirectory(${EP_PRODUCT_DIR} product)
 
-add_executable(firmware ${EP_MAIN_SOURCE})
-target_link_libraries(firmware PRIVATE ep_product ${EP_TARGET_LIBS})
+# main.cpp ở thư mục gốc: một entry point duy nhất cho mọi target & sản phẩm.
+add_executable(firmware main.cpp)
+target_link_libraries(firmware PRIVATE ep_product ep_target ${EP_TARGET_LIBS})
 
 if(EP_BUILD_TESTS)
   enable_testing()
