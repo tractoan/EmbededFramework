@@ -34,7 +34,7 @@ Mục tiêu:
 │ OSAL (osal/)                     │ HAL (hal/)  ngoại vi TRÊN chip      │
 │  Thread · Mutex · Semaphore      │  IGpio · IUart · II2c · INvStorage  │
 │  Queue<T,N> · time · Critical    │  IBoard (ID logic -> chân vật lý)   │
-│  ports: posix │ freertos │ ...   │  ports: linux_sim │ stm32f4 │ ...   │
+│  ports: posix·freertos·ucos2/3   │  ports: linux_sim │ stm32f4 │ ...   │
 ├──────────────────────────────────┴─────────────────────────────────────┤
 │ CORE (core/)   Status · NonCopyable · config.hpp · compiler macros     │
 └────────────────────────────────────────────────────────────────────────┘
@@ -90,14 +90,15 @@ Lớp dưới không bao giờ biết lớp trên; giao tiếp ngược lên ch�
 EmbededFramework/
 ├── CMakeLists.txt              # EP_TARGET, EP_PRODUCT
 ├── main.cpp                    # entry point duy nhất (mọi target, mọi sản phẩm)
-├── cmake/targets/              # linux_sim.cmake, stm32f4_freertos.cmake  (chọn port)
+├── cmake/targets/              # linux_sim, stm32f4_{freertos,ucos2,ucos3}.cmake (chọn port)
+│   └── common/stm32f4_cube.cmake   # phần CubeMX dùng chung cho mọi target STM32F4
 ├── cmake/toolchains/           # arm-none-eabi.cmake
 ├── utils/include/utils/        # crc.hpp, fixed_point.hpp, ring_buffer.hpp  (độc lập)
 ├── platform/                   # TẦNG NỀN TẢNG
 │   ├── core/include/core/      # status.hpp, config.hpp, noncopyable.hpp, compiler.hpp
 │   ├── osal/
 │   │   ├── include/osal/       # API trung lập: thread, mutex, semaphore, queue, time, critical
-│   │   └── ports/{posix,freertos}/   # osal_port_types.hpp + osal_<os>.cpp
+│   │   └── ports/{posix,freertos,ucos2,ucos3}/   # osal_port_types.hpp + osal_<os>.cpp
 │   ├── hal/
 │   │   ├── include/hal/        # gpio, uart, i2c, storage, board
 │   │   └── ports/{linux_sim,stm32f4}/
@@ -106,7 +107,10 @@ EmbededFramework/
 │   └── target/                 # khởi động theo nền tảng đích: target::init / run / stop_requested
 │       ├── include/target/target.hpp
 │       ├── linux_sim/          # tham số dòng lệnh, Ctrl+C, --run-for
-│       └── stm32f4_freertos/   # HAL_Init, clock, ngoại vi CubeMX, start scheduler, hook FreeRTOS
+│       ├── stm32f4_freertos/   # HAL_Init, clock, ngoại vi CubeMX, start scheduler, hook FreeRTOS
+│       ├── stm32f4_ucos2/      # ... OSInit/OSStart, SysTick + PendSV cho uC/OS-II
+│       ├── stm32f4_ucos3/      # ... CPU_Init/OSInit/OSStart, SysTick + PendSV cho uC/OS-III
+│       └── common/stm32f4/     # clock_config.c dùng chung
 ├── services/
 │   └── include/services/       # event_bus, param_store, command_service, logger, led_service,
 │                               # buffer, buffer_allocators
@@ -350,10 +354,29 @@ việc nối nền tảng với ứng dụng chỉ diễn ra ở `main.cpp` thư
 
 ### 6.4 Port sang hệ điều hành mới (Zephyr, ThreadX, CMSIS-RTOS2, ESP-IDF…)
 
-1. Tạo `platform/osal/ports/<os>/include/osal_port_types.hpp` – khai báo `MutexHandle`, `SemaphoreHandle`, `ThreadHandle`.
+1. Tạo `platform/osal/ports/<os>/include/osal_port_types.hpp` – khai báo `MutexHandle`, `SemaphoreHandle`,
+   `ThreadHandle`, `CriticalState` (header C của RTOS bọc trong `extern "C"`).
 2. Tạo `platform/osal/ports/<os>/osal_<os>.cpp` – hiện thực các hàm trong `platform/osal/include/osal/*.hpp`
-   (tham khảo `osal_freertos.cpp`, ~100 dòng).
+   (tham khảo `osal_freertos.cpp`, `osal_ucos2.cpp`, `osal_ucos3.cpp`).
 3. Đặt `EP_OSAL_PORT=<os>` trong file target (`cmake/targets/*.cmake`). `Queue<T,N>` tự động hoạt động vì được viết trên Mutex/Semaphore.
+4. Chạy `tests/test_osal.cpp` trên port mới: các test `osal_*` kiểm tra đúng những ngữ nghĩa mà mọi port phải giữ
+   (`kNoWait` không chặn, timeout có hạn, semaphore không vượt `max`, tạo/join thread lặp lại, vùng găng lồng nhau).
+
+Bảng ánh xạ của các port hiện có:
+
+| Ngữ nghĩa OSAL | FreeRTOS | uC/OS-II | uC/OS-III |
+|---|---|---|---|
+| Chờ mãi / không chờ | `portMAX_DELAY` / 0 | timeout `0` / `OSSemAccept`, `OSMutexAccept` | timeout `0` + `BLOCKING` / `NON_BLOCKING` |
+| Priority | 1 số / mức, chia sẻ | **duy nhất mỗi task** → port tự cấp trong dải 8 priority / mức (`EP_UCOS2_PRIO_*`) | 1 số / mức, round-robin (`EP_UCOS3_PRIO_*`) |
+| Mutex | mutex có kế thừa priority | `OSMutexCreate(OS_PRIO_MUTEX_CEIL_DIS)`, hoặc semaphore nhị phân nếu bản cũ | `OS_MUTEX` |
+| Stack khi `stack_mem == nullptr` | `xTaskCreate` (heap) | vùng stack tĩnh `EP_UCOS_STACK_POOL_BYTES` (không thu hồi) | như uC/OS-II |
+| Kết thúc thread / `join` | semaphore `done` + `vTaskDelete(NULL)` | `done` + `OSTaskDel(OS_PRIO_SELF)` | `done`, task tự treo, `join` gọi `OSTaskDel` (TCB nằm trong `Thread`) |
+| Vùng găng | `taskENTER_CRITICAL` | `OS_CPU_SR_Save/Restore` (`OS_CRITICAL_METHOD == 3`) | `CPU_SR_Save/Restore` (uC/CPU) |
+| `yield()` | `taskYIELD` | `OSTimeDly(1)` (không có task cùng priority) | `OSSchedRoundRobinYield` hoặc `OSTimeDly(1)` |
+
+Trên uC/OS, **mọi object OSAL phải được tạo sau `OSInit()`**: `target::init()` gọi `OSInit` trước tiên, và mọi object
+của framework đều được tạo bên trong `app_main`, nên quy tắc này tự thỏa nếu không khai báo `osal::Mutex`/`Semaphore`/
+`Queue` ở phạm vi toàn cục (namespace scope).
 
 ### 6.5 Thêm tiện ích dùng chung
 
@@ -417,16 +440,39 @@ alarm status | ack           trạng thái cảnh báo / xác nhận
 link list | set <kênh> <off|auto|cli|modbus>   kênh truyền thông & đổi giao thức
 ```
 
-### STM32F407 + FreeRTOS
+### STM32F407 + FreeRTOS / uC/OS-II / uC/OS-III
+
+Cùng HAL port `stm32f4`, cùng ứng dụng – chỉ khác RTOS:
 
 ```bash
 cmake -B build-stm32 -DEP_TARGET=stm32f4_freertos \
       -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/arm-none-eabi.cmake \
       -DEP_CUBE_DIR=/path/to/cubemx_project -DEP_FREERTOS_DIR=/path/to/FreeRTOS-Kernel
 ```
+```bash
+cmake -B build-ucos2 -DEP_TARGET=stm32f4_ucos2 \
+      -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/arm-none-eabi.cmake -DEP_CUBE_DIR=/path/to/cubemx_project \
+      -DEP_UCOS2_DIR=/path/to/uC-OS2 -DEP_UCOS2_PORT_DIR=/path/to/uC-OS2/Ports/ARM-Cortex-M/ARMv7-M/GNU \
+      -DEP_UCOS_CFG_DIR=/path/to/ucos_config
+```
+```bash
+cmake -B build-ucos3 -DEP_TARGET=stm32f4_ucos3 \
+      -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/arm-none-eabi.cmake -DEP_CUBE_DIR=/path/to/cubemx_project \
+      -DEP_UCOS3_DIR=/path/to/uC-OS3 -DEP_UCOS3_PORT_DIR=/path/to/uC-OS3/Ports/ARM-Cortex-M/ARMv7-M/GNU \
+      -DEP_UCCPU_DIR=/path/to/uC-CPU -DEP_UCCPU_PORT_DIR=/path/to/uC-CPU/ARM-Cortex-M/ARMv7-M/GNU \
+      -DEP_UCLIB_DIR=/path/to/uC-LIB -DEP_UCOS_CFG_DIR=/path/to/ucos_config
+```
 
-Xem yêu cầu cấu hình CubeMX ở đầu `cmake/targets/stm32f4_freertos.cmake`.
-Port STM32 và FreeRTOS là **mẫu tham khảo** – chưa được biên dịch/kiểm thử trên phần cứng thật trong repo này.
+Yêu cầu CubeMX chung: `cmake/targets/common/stm32f4_cube.cmake`. Riêng uC/OS: tắt sinh handler PendSV và SysTick
+trong CubeMX (target tự định nghĩa và chuyển cho `OS_CPU_PendSVHandler`/`OS_CPU_SysTickHandler`); cấu hình
+`os_cfg.h` tối thiểu ghi ở đầu `osal_ucos2.cpp` / `osal_ucos3.cpp`. Đường dẫn port CPU ở trên theo bố cục
+repo mã nguồn mở của Micrium (weston-embedded); bản Micrium cũ có thể đặt khác – chỉ cần trỏ đúng thư mục.
+
+**Mức độ kiểm chứng:** các target STM32 (cả 3 RTOS) là **mẫu tham khảo – chưa được biên dịch với toolchain ARM hay
+chạy trên phần cứng thật** trong repo này. Riêng hai port OSAL uC/OS-II/III đã được biên dịch (`-Wall -Wextra`, không
+warning) và chạy toàn bộ unit test cùng firmware mô phỏng trên một bản **giả lập API uC/OS bằng pthread** (không
+nằm trong repo), nên logic port đã được kiểm tra; các khác biệt của kernel thật (lập lịch theo priority, ngắt,
+port CPU) vẫn cần kiểm thử trên board.
 
 ---
 

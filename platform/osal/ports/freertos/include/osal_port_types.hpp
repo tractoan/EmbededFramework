@@ -23,4 +23,6 @@ struct ThreadHandle {
     SemaphoreHandle_t done;
 };
 
+struct CriticalState {};   // taskENTER_CRITICAL tự đếm lồng nhau
+
 }  // namespace osal::port

@@ -11,7 +11,7 @@
 
 extern "C" {
 #include "stm32f4xx_hal.h"
-void SystemClock_Config(void);       // clock_config.c (cùng thư mục)
+void SystemClock_Config(void);       // platform/target/common/stm32f4/clock_config.c
 void MX_GPIO_Init(void);             // CubeMX: gpio.c
 void MX_USART2_UART_Init(void);      // CubeMX: usart.c
 void MX_USART3_UART_Init(void);      // CubeMX: usart.c (Aux / RS485)
