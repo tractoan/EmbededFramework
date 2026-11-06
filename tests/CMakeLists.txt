@@ -4,6 +4,7 @@ add_executable(ep_tests
   test_utils.cpp
   test_buffer.cpp
   test_osal.cpp
+  test_memory.cpp
   test_event_bus.cpp
   test_param_store.cpp
   test_module_manager.cpp
@@ -12,5 +13,5 @@ add_executable(ep_tests
   test_modbus.cpp
   test_link_manager.cpp)
 target_include_directories(ep_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(ep_tests PRIVATE ep_business ep_proto_cli ep_proto_modbus)
+target_link_libraries(ep_tests PRIVATE ep_heap_guard ep_business ep_proto_cli ep_proto_modbus)
 add_test(NAME ep_tests COMMAND ep_tests)

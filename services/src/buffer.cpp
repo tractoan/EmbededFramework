@@ -1,6 +1,5 @@
 #include "services/buffer.hpp"
 
-#include <cstdlib>
 #include <cstring>
 #include <new>
 
@@ -159,48 +158,6 @@ bool PoolAllocator::owns(const void* block) const {
 PoolStats PoolAllocator::pool_stats(std::size_t index) const {
     osal::CriticalSection cs;
     return index < count_ ? pools_[index]->stats() : PoolStats{0, 0, 0, 0, 0};
-}
-
-// =========================================================== HeapAllocator
-namespace {
-constexpr std::size_t kHeapPrefix = 16;   // lưu kích thước block, giữ căn lề 16
-}
-
-void* HeapAllocator::allocate(std::size_t bytes, std::size_t& capacity) {
-    {
-        osal::CriticalSection cs;
-        if (bytes > budget_ - used_) {
-            ++failures_;
-            return nullptr;
-        }
-        used_ += bytes;
-        if (used_ > peak_) peak_ = used_;
-    }
-    auto* raw = static_cast<std::uint8_t*>(std::malloc(kHeapPrefix + bytes));
-    if (raw == nullptr) {
-        osal::CriticalSection cs;
-        used_ -= bytes;
-        ++failures_;
-        return nullptr;
-    }
-    std::memcpy(raw, &bytes, sizeof(bytes));
-    capacity = bytes;
-    return raw + kHeapPrefix;
-}
-
-void HeapAllocator::release(void* block) {
-    if (block == nullptr) return;
-    auto* raw         = static_cast<std::uint8_t*>(block) - kHeapPrefix;
-    std::size_t bytes = 0;
-    std::memcpy(&bytes, raw, sizeof(bytes));
-    std::free(raw);
-    osal::CriticalSection cs;
-    used_ -= bytes;
-}
-
-PoolStats HeapAllocator::pool_stats(std::size_t index) const {
-    osal::CriticalSection cs;
-    return index == 0 ? PoolStats{0, budget_, used_, peak_, failures_} : PoolStats{0, 0, 0, 0, 0};
 }
 
 // ========================================================== ChainAllocator

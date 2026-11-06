@@ -17,16 +17,16 @@
 
 namespace svc {
 
-// Thống kê một "lớp" của allocator (một pool kích thước cố định, hoặc vùng heap).
+// Thống kê một "lớp" của allocator (một pool kích thước cố định).
 struct PoolStats {
-    std::size_t block_size;   // 0 = kích thước thay đổi (heap)
-    std::size_t capacity;     // pool: số block; heap: giới hạn byte
-    std::size_t used;         // pool: block đang dùng; heap: byte đang dùng
+    std::size_t block_size;
+    std::size_t capacity;     // số block
+    std::size_t used;         // số block đang dùng
     std::size_t peak;         // mức dùng cao nhất từng đạt
     std::uint32_t failures;   // số lần cấp phát thất bại
 };
 
-// Chiến lược cấp phát – thay được theo sản phẩm/nền tảng (pool tĩnh, heap, kết hợp...).
+// Chiến lược cấp phát – thay được theo sản phẩm (các pool tĩnh, kết hợp nhiều pool...).
 // Phải thread-safe. Chưa hỗ trợ gọi từ ISR.
 class IBufferAllocator {
 public:

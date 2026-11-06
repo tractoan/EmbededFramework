@@ -61,24 +61,26 @@ TEST(buffer_reference_counting_shares_memory) {
     CHECK_EQ(blocks.stats().used, 0u);
 }
 
-TEST(buffer_heap_budget_and_chain) {
-    svc::StaticBlockPool<64, 1> blocks;
-    svc::PoolAllocator pools({&blocks});
-    svc::HeapAllocator heap(100000);
-    svc::ChainAllocator chain(pools, heap);
+TEST(buffer_chain_of_pools) {
+    // Pool chung hết chỗ -> dùng pool dự trữ; tất cả vẫn là bộ nhớ tĩnh.
+    svc::StaticBlockPool<64, 1> common_blocks;
+    svc::PoolAllocator common({&common_blocks});
+    svc::StaticBlockPool<256, 2> reserve_blocks;
+    svc::PoolAllocator reserve({&reserve_blocks});
+    svc::ChainAllocator chain(common, reserve);
 
-    svc::Buffer small = svc::Buffer::allocate(chain, 8);     // vào pool
-    svc::Buffer big   = svc::Buffer::allocate(chain, 50000); // quá pool -> heap
-    CHECK(small && big && big.size() == 50000);
-    std::memset(big.data(), 1, big.size());
+    svc::Buffer a = svc::Buffer::allocate(chain, 8);   // pool chung
+    svc::Buffer b = svc::Buffer::allocate(chain, 8);   // chung hết -> dự trữ
+    svc::Buffer c = svc::Buffer::allocate(chain, 200); // quá lớn cho pool chung -> dự trữ
+    CHECK(a && b && c);
+    CHECK(!svc::Buffer::allocate(chain, 8));            // cả hai đều hết
     CHECK_EQ(chain.pool_count(), 2u);
     CHECK_EQ(chain.pool_stats(0).used, 1u);
-    CHECK(chain.pool_stats(1).used >= 50000u);
-    CHECK(!svc::Buffer::allocate(chain, 60000));             // vượt ngân sách heap
-    CHECK_EQ(chain.pool_stats(1).failures, 1u);
+    CHECK_EQ(chain.pool_stats(1).used, 2u);
 
-    small.reset();
-    big.reset();
+    a.reset();
+    b.reset();
+    c.reset();
     CHECK_EQ(chain.pool_stats(0).used, 0u);
     CHECK_EQ(chain.pool_stats(1).used, 0u);
 

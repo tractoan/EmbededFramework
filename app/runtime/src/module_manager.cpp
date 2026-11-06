@@ -29,7 +29,7 @@ core::Status ModuleManager::init_all(SystemContext& ctx) {
     return ctx.bus.subscribe(svc::evt::kAny, this);
 }
 
-core::Status ModuleManager::start() {
+core::Status ModuleManager::start(const osal::ThreadConfig& task) {
     const std::uint64_t now = osal::now_ms();
     for (std::size_t i = 0; i < count_; ++i) {
         const core::Status st = slots_[i].module->on_start();
@@ -41,7 +41,7 @@ core::Status ModuleManager::start() {
     }
     running_ = true;
     LOGI(kTag, "%u module(s) running", static_cast<unsigned>(count_));
-    return thread_.start(osal::ThreadConfig{"app", osal::Priority::Normal, 4096, nullptr},
+    return thread_.start(task,
                          &osal::Thread::invoke<ModuleManager, &ModuleManager::run>, this);
 }
 

@@ -23,8 +23,10 @@ public:
     core::Status init(Services& services);   // đăng ký lệnh "link", theo dõi kParamChanged
 
     // Gọi trước ParamStore::load() (trong product::setup) để tham số kênh được nạp từ Flash.
+    // priority/stack_bytes: thread RX của kênh (stack lấy từ vùng stack tĩnh khi start()).
     core::Status add_channel(const char* name, IByteStream* stream, std::initializer_list<IProtocol*> protocols,
-                             ProtocolId default_protocol);
+                             ProtocolId default_protocol, osal::Priority priority = osal::Priority::Normal,
+                             std::size_t stack_bytes = 4096);
 
     core::Status start();
     void stop();
@@ -53,6 +55,8 @@ private:
         std::size_t n_protocols = 0;
         svc::ParamDef def{};
         char param_name[24]{};
+        osal::Priority priority{osal::Priority::Normal};
+        std::size_t stack_bytes = 4096;
 
         std::atomic<std::int32_t> requested{proto::kOff};
         std::atomic<IProtocol*> active{nullptr};

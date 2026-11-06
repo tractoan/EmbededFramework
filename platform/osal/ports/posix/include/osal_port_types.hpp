@@ -22,4 +22,6 @@ struct ThreadHandle {
     std::thread t;
 };
 
+struct CriticalState {};   // dùng một recursive mutex toàn cục
+
 }  // namespace osal::port

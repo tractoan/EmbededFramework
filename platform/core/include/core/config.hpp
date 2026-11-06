@@ -42,6 +42,13 @@
 #ifndef EP_CFG_COMM_MAX_PROTOCOLS
 #define EP_CFG_COMM_MAX_PROTOCOLS 4
 #endif
+// Vùng stack tĩnh cho thread không tự cung cấp stack (chỉ cấp trong giai đoạn khởi động).
+#ifndef EP_CFG_STACK_POOL_BYTES
+#define EP_CFG_STACK_POOL_BYTES (16u * 1024u)
+#endif
+#ifndef EP_CFG_MAX_THREADS
+#define EP_CFG_MAX_THREADS 16
+#endif
 #ifndef EP_CFG_LOG_LINE_MAX
 #define EP_CFG_LOG_LINE_MAX 160
 #endif
@@ -65,6 +72,8 @@ inline constexpr std::size_t kCliMaxArgs          = EP_CFG_CLI_MAX_ARGS;
 inline constexpr bool        kCliEcho             = EP_CFG_CLI_ECHO != 0;
 inline constexpr std::size_t kCommMaxChannels     = EP_CFG_COMM_MAX_CHANNELS;
 inline constexpr std::size_t kCommMaxProtocols    = EP_CFG_COMM_MAX_PROTOCOLS;
+inline constexpr std::size_t kStackPoolBytes      = EP_CFG_STACK_POOL_BYTES;
+inline constexpr std::size_t kMaxThreads          = EP_CFG_MAX_THREADS;
 inline constexpr std::size_t kLogLineMax          = EP_CFG_LOG_LINE_MAX;
 inline constexpr std::size_t kLogSinks            = EP_CFG_LOG_SINKS;
 }  // namespace core::cfg

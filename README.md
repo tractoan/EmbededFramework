@@ -6,7 +6,8 @@ Mục tiêu:
 - **Chuyển nền tảng** (MCU, board, RTOS, Linux) mà **không sửa** code nghiệp vụ.
 - **Tùy biến nghiệp vụ** ở nhiều mức: chọn module, cấu hình lúc biên dịch, tham số lúc chạy.
 - **Đổi giao thức truyền thông linh hoạt** (CLI, Modbus RTU, MAVLink…) theo sản phẩm, lúc chạy, hoặc tự nhận dạng.
-- Phù hợp embedded: không exception, không RTTI, **không cấp phát heap sau khi khởi động**, tài nguyên tĩnh.
+- Phù hợp embedded: không exception, không RTTI, **không cấp phát động sau khi khởi động** (được kiểm chứng lúc chạy
+  bằng bộ chặn heap), tài nguyên tĩnh, **priority của từng task cấu hình được** (16 mức, giống nhau trên mọi RTOS).
 
 ---
 
@@ -27,14 +28,14 @@ Mục tiêu:
 ├────────────────────────────────────────────────────────────────────────┤
 │ SERVICES (services/)                                                   │
 │  EventBus · ParamStore(NV+CRC) · CommandService(bảng lệnh) · Logger    │
-│  LedService · Buffer + allocator (Pool / Heap / Chain) cho payload lớn │
+│  LedService · Buffer + allocator (Pool / Chain, tĩnh) cho payload lớn  │
 ╞═════════════════════════ PLATFORM (platform/) ═════════════════════════╡
 │ DEVICE (device/)  thiết bị NGOÀI chip: Tmp102 : ITemperatureSensor     │
 ├──────────────────────────────────┬─────────────────────────────────────┤
 │ OSAL (osal/)                     │ HAL (hal/)  ngoại vi TRÊN chip      │
 │  Thread · Mutex · Semaphore      │  IGpio · IUart · II2c · INvStorage  │
 │  Queue<T,N> · time · Critical    │  IBoard (ID logic -> chân vật lý)   │
-│  ports: posix │ freertos │ ...   │  ports: linux_sim │ stm32f4 │ ...   │
+│  ports: posix·freertos·ucos2/3   │  ports: linux_sim │ stm32f4 │ ...   │
 ├──────────────────────────────────┴─────────────────────────────────────┤
 │ CORE (core/)   Status · NonCopyable · config.hpp · compiler macros     │
 └────────────────────────────────────────────────────────────────────────┘
@@ -90,14 +91,15 @@ Lớp dưới không bao giờ biết lớp trên; giao tiếp ngược lên ch�
 EmbededFramework/
 ├── CMakeLists.txt              # EP_TARGET, EP_PRODUCT
 ├── main.cpp                    # entry point duy nhất (mọi target, mọi sản phẩm)
-├── cmake/targets/              # linux_sim.cmake, stm32f4_freertos.cmake  (chọn port)
+├── cmake/targets/              # linux_sim, stm32f4_{freertos,ucos2,ucos3}.cmake (chọn port)
+│   └── common/stm32f4_cube.cmake   # phần CubeMX dùng chung cho mọi target STM32F4
 ├── cmake/toolchains/           # arm-none-eabi.cmake
 ├── utils/include/utils/        # crc.hpp, fixed_point.hpp, ring_buffer.hpp  (độc lập)
 ├── platform/                   # TẦNG NỀN TẢNG
 │   ├── core/include/core/      # status.hpp, config.hpp, noncopyable.hpp, compiler.hpp
 │   ├── osal/
 │   │   ├── include/osal/       # API trung lập: thread, mutex, semaphore, queue, time, critical
-│   │   └── ports/{posix,freertos}/   # osal_port_types.hpp + osal_<os>.cpp
+│   │   └── ports/{posix,freertos,ucos2,ucos3}/   # osal_port_types.hpp + osal_<os>.cpp
 │   ├── hal/
 │   │   ├── include/hal/        # gpio, uart, i2c, storage, board
 │   │   └── ports/{linux_sim,stm32f4}/
@@ -106,7 +108,10 @@ EmbededFramework/
 │   └── target/                 # khởi động theo nền tảng đích: target::init / run / stop_requested
 │       ├── include/target/target.hpp
 │       ├── linux_sim/          # tham số dòng lệnh, Ctrl+C, --run-for
-│       └── stm32f4_freertos/   # HAL_Init, clock, ngoại vi CubeMX, start scheduler, hook FreeRTOS
+│       ├── stm32f4_freertos/   # HAL_Init, clock, ngoại vi CubeMX, start scheduler, hook FreeRTOS
+│       ├── stm32f4_ucos2/      # ... OSInit/OSStart, SysTick + PendSV cho uC/OS-II
+│       ├── stm32f4_ucos3/      # ... CPU_Init/OSInit/OSStart, SysTick + PendSV cho uC/OS-III
+│       └── common/stm32f4/     # clock_config.c dùng chung
 ├── services/
 │   └── include/services/       # event_bus, param_store, command_service, logger, led_service,
 │                               # buffer, buffer_allocators
@@ -181,11 +186,13 @@ void on_event(const svc::Event& e) {                                      // m�
 | Allocator | Cơ chế | Khi nào dùng |
 |---|---|---|
 | `PoolAllocator` + `StaticBlockPool<Size, Count>` | Nhiều lớp kích thước, bộ nhớ tĩnh, O(1), không phân mảnh; lớp vừa nhất hết → lấy lớp lớn hơn | Mặc định cho MCU, hệ thời gian thực |
-| `HeapAllocator(budget)` | `malloc`/`free` có giới hạn tổng byte | Payload rất lớn / khó đoán; MCU có RAM dư, Linux |
-| `ChainAllocator(primary, fallback)` | Thử allocator chính, hết thì dùng dự phòng | Pool cho trường hợp thường, heap cho trường hợp hiếm |
+| `ChainAllocator(primary, fallback)` | Thử allocator chính, hết thì dùng dự phòng | Pool chung + pool dự trữ riêng cho dữ liệu quan trọng |
+
+  Không có allocator dùng heap: mọi block đều nằm trong bộ nhớ tĩnh khai báo lúc build. Cấp/trả block từ pool
+  lúc chạy là O(1), tất định và **không phải cấp phát động** theo nghĩa heap.
 
   Cấp phát thất bại trả về `Buffer` rỗng (không crash); số lần thất bại, mức dùng và đỉnh xem bằng `sys buffers`.
-  Ví dụ: `thermo_pro` = pool 64 B×16 / 512 B×8 / 2 KB×4 → heap 64 KB; `thermo_lite` = một pool 128 B×4, không heap.
+  Ví dụ: `thermo_pro` = pool 64 B×16 / 512 B×8 / 2 KB×4 (lô tối đa 1000 mẫu); `thermo_lite` = một pool 128 B×4 (52 mẫu).
   Allocator thread-safe (vùng găng ngắn); **chưa** hỗ trợ cấp phát trong ISR.
 
 ### Trình tự khởi động (`app::System::init`)
@@ -197,6 +204,50 @@ void on_event(const svc::Event& e) {                                      // m�
 5. `product::setup()` → thêm module + khai báo kênh/giao thức; rồi `on_init()` từng module (đăng ký tham số, lệnh)
 6. `params.load()` từ NV, gồm cả lựa chọn giao thức `comm.<kênh>` (CRC sai/không có → giữ mặc định)
 7. Start service → `on_start()` từng module → `links.start()` (mỗi kênh bật giao thức đã chọn) → publish `kSystemStarted`
+8. `osal::end_startup()`: **niêm phong bộ nhớ** – từ đây cấm heap và cấm lấy thêm stack (xem dưới)
+
+Nếu bước 7 thất bại (vd. vùng stack không đủ), các thread đã khởi động được dừng sạch và lỗi chỉ rõ task nào,
+mức dùng vùng stack, cần sửa `TaskPlan` / `EP_CFG_STACK_POOL_BYTES`.
+
+### Bộ nhớ: không cấp phát động sau khi khởi động
+
+| Loại bộ nhớ | Cơ chế | Khi nào được cấp |
+|---|---|---|
+| Object của framework, sản phẩm | `static` / thành viên của `System` | Lúc khởi động |
+| Stack của thread | Do sản phẩm cấp (`stack_mem`) hoặc lấy từ **vùng stack tĩnh** `EP_CFG_STACK_POOL_BYTES` (`osal::allocate_stack`) | Chỉ lúc khởi động |
+| Kernel object (TCB, semaphore, mutex) | Nằm ngay trong wrapper OSAL (`xTaskCreateStatic`, `OS_TCB`, …) | Cùng lúc với object chứa nó |
+| Payload lớn | `svc::Buffer` + pool tĩnh | Lúc chạy, O(1), không heap |
+| Heap (`new`, `malloc`) | **Không dùng.** FreeRTOS: `configSUPPORT_DYNAMIC_ALLOCATION = 0`, không build `heap_x.c` | – |
+
+**Kiểm chứng lúc chạy:** firmware link `ep_heap_guard` (thay `operator new/delete`; trên STM32 bọc thêm
+`malloc/calloc/realloc` bằng `-Wl,--wrap`). Sau `osal::end_startup()`, mọi cấp phát heap là **vi phạm** và
+gọi handler của target: Linux in `FATAL` rồi dừng (để lộ lỗi khi phát triển/CI), STM32 reset board.
+Thread tạo sau khởi động phải tự mang stack tĩnh, nếu không `Thread::start` trả `NoMemory` trên mọi port.
+Port POSIX vẫn trừ stack vào vùng stack chung (dù `std::thread` tự quản stack) để bản mô phỏng phát hiện đúng
+lỗi thiếu stack như trên MCU. Lệnh `sys tasks` hiện mức dùng vùng stack và số vi phạm heap.
+
+### Priority của task
+
+`osal::Priority` có **16 mức: 0 (thấp nhất) … 15 (cao nhất)**, giống nhau trên mọi RTOS; tên sẵn có:
+`Idle`=0, `Low`=4, `Normal`=8, `High`=12, `Realtime`=15; hoặc `osal::Priority{11}`, `Priority::High.lower(1)`.
+
+Sản phẩm cấu hình priority + stack của **mọi task do framework tạo** trong `product::setup()`:
+
+```cpp
+s.tasks.app  = osal::ThreadConfig{"app", osal::Priority::High, 4096, nullptr};   // nghiệp vụ (ModuleManager)
+s.tasks.leds = osal::ThreadConfig{"led", osal::Priority::Low, 1024, nullptr};    // LedService
+s.links.add_channel("console", &s.console, {&cli}, comm::proto::kCli, osal::Priority{6}, 4096);   // mỗi kênh
+```
+
+`stack_mem = nullptr` → lấy từ vùng stack tĩnh; hoặc trỏ tới buffer `static` của sản phẩm (vd. để đặt stack ở
+vùng RAM riêng). Mỗi port ánh xạ tuyến tính 16 mức sang priority native:
+
+| Port | Mức 15 → … → mức 0 | Tham số |
+|---|---|---|
+| FreeRTOS | `configMAX_PRIORITIES-1` … `tskIDLE_PRIORITY` (số lớn = cao) | – |
+| uC/OS-II | `EP_UCOS2_PRIO_TOP` (4) … tăng `EP_UCOS2_PRIO_STRIDE` (3) mỗi mức (số nhỏ = cao); tối đa STRIDE task cùng mức (priority native duy nhất) | kiểm tra lúc build so với `OS_LOWEST_PRIO` |
+| uC/OS-III | `EP_UCOS3_PRIO_TOP` (4) … +1 mỗi mức; nhiều task cùng mức chạy round-robin | kiểm tra lúc build so với `OS_CFG_PRIO_MAX` |
+| POSIX (host) | Bỏ qua (cần quyền realtime); chỉ ghi nhận để hiển thị | – |
 
 ---
 
@@ -208,7 +259,8 @@ void on_event(const svc::Event& e) {                                      // m�
 | **Cấu hình module (compile-time)** | `Module::Config` truyền vào constructor | ngưỡng, chu kỳ mẫu, latch theo từng sản phẩm |
 | **Cấu hình hệ thống (compile-time)** | `product_config.hpp` override `EP_CFG_*` | độ sâu queue, số module, mức log tối thiểu |
 | **Tham số runtime** | `ParamStore` + CLI `param set/save`, sự kiện `kParamChanged` | đổi `alarm.high` khi đang chạy, lưu Flash |
-| **Bộ nhớ payload lớn** | Allocator của `svc::Buffer` chọn trong `product::setup()` | pool tĩnh cho MCU nhỏ, pool + heap cho bản cao cấp |
+| **Bộ nhớ payload lớn** | Pool tĩnh của `svc::Buffer` chọn trong `product::setup()` | pool nhỏ cho MCU nhỏ, nhiều lớp pool cho bản cao cấp |
+| **Priority & stack của task** | `TaskPlan` (`s.tasks`) + tham số của `add_channel()`; `EP_CFG_STACK_POOL_BYTES` | nghiệp vụ `High`, console `6`, LED `Low` |
 | **Mở rộng hành vi** | Module mới / state mới trong `StateMachine` | thêm trạng thái `Maintenance` |
 | **Module riêng của sản phẩm** | Đặt trong `products/<p>/` | `products/thermo_pro/stats_reporter.hpp` |
 | **Giao thức truyền thông** | Kênh + giao thức trong `product::setup()`, tham số `comm.<kênh>` | xem mục 5 |
@@ -350,10 +402,29 @@ việc nối nền tảng với ứng dụng chỉ diễn ra ở `main.cpp` thư
 
 ### 6.4 Port sang hệ điều hành mới (Zephyr, ThreadX, CMSIS-RTOS2, ESP-IDF…)
 
-1. Tạo `platform/osal/ports/<os>/include/osal_port_types.hpp` – khai báo `MutexHandle`, `SemaphoreHandle`, `ThreadHandle`.
+1. Tạo `platform/osal/ports/<os>/include/osal_port_types.hpp` – khai báo `MutexHandle`, `SemaphoreHandle`,
+   `ThreadHandle`, `CriticalState` (header C của RTOS bọc trong `extern "C"`).
 2. Tạo `platform/osal/ports/<os>/osal_<os>.cpp` – hiện thực các hàm trong `platform/osal/include/osal/*.hpp`
-   (tham khảo `osal_freertos.cpp`, ~100 dòng).
+   (tham khảo `osal_freertos.cpp`, `osal_ucos2.cpp`, `osal_ucos3.cpp`).
 3. Đặt `EP_OSAL_PORT=<os>` trong file target (`cmake/targets/*.cmake`). `Queue<T,N>` tự động hoạt động vì được viết trên Mutex/Semaphore.
+4. Chạy `tests/test_osal.cpp` trên port mới: các test `osal_*` kiểm tra đúng những ngữ nghĩa mà mọi port phải giữ
+   (`kNoWait` không chặn, timeout có hạn, semaphore không vượt `max`, tạo/join thread lặp lại, vùng găng lồng nhau).
+
+Bảng ánh xạ của các port hiện có:
+
+| Ngữ nghĩa OSAL | FreeRTOS | uC/OS-II | uC/OS-III |
+|---|---|---|---|
+| Chờ mãi / không chờ | `portMAX_DELAY` / 0 | timeout `0` / `OSSemAccept`, `OSMutexAccept` | timeout `0` + `BLOCKING` / `NON_BLOCKING` |
+| Priority (16 mức logic) | ánh xạ tuyến tính, chia sẻ | **duy nhất mỗi task** → mỗi mức một dải `EP_UCOS2_PRIO_STRIDE` priority, port lấy chỗ trống | 1 số / mức, round-robin (`EP_UCOS3_PRIO_TOP`) |
+| Mutex | mutex có kế thừa priority | `OSMutexCreate(OS_PRIO_MUTEX_CEIL_DIS)`, hoặc semaphore nhị phân nếu bản cũ | `OS_MUTEX` |
+| Stack khi `stack_mem == nullptr` | vùng stack tĩnh chung + `xTaskCreateStatic` | vùng stack tĩnh chung | vùng stack tĩnh chung |
+| Kết thúc thread / `join` | semaphore `done` + `vTaskDelete(NULL)` | `done` + `OSTaskDel(OS_PRIO_SELF)` | `done`, task tự treo, `join` gọi `OSTaskDel` (TCB nằm trong `Thread`) |
+| Vùng găng | `taskENTER_CRITICAL` | `OS_CPU_SR_Save/Restore` (`OS_CRITICAL_METHOD == 3`) | `CPU_SR_Save/Restore` (uC/CPU) |
+| `yield()` | `taskYIELD` | `OSTimeDly(1)` (không có task cùng priority) | `OSSchedRoundRobinYield` hoặc `OSTimeDly(1)` |
+
+Trên uC/OS, **mọi object OSAL phải được tạo sau `OSInit()`**: `target::init()` gọi `OSInit` trước tiên, và mọi object
+của framework đều được tạo bên trong `app_main`, nên quy tắc này tự thỏa nếu không khai báo `osal::Mutex`/`Semaphore`/
+`Queue` ở phạm vi toàn cục (namespace scope).
 
 ### 6.5 Thêm tiện ích dùng chung
 
@@ -410,30 +481,54 @@ Lệnh CLI:
 
 ```
 help                         danh sách lệnh
-sys info | modules | buffers | log <0-5> | reboot | quit
+sys info | modules | tasks | buffers | log <0-5> | reboot | quit
 param list | get <n> | set <n> <v> | save | reset
 temp                         nhiệt độ hiện tại, thống kê
 alarm status | ack           trạng thái cảnh báo / xác nhận
 link list | set <kênh> <off|auto|cli|modbus>   kênh truyền thông & đổi giao thức
 ```
 
-### STM32F407 + FreeRTOS
+### STM32F407 + FreeRTOS / uC/OS-II / uC/OS-III
+
+Cùng HAL port `stm32f4`, cùng ứng dụng – chỉ khác RTOS:
 
 ```bash
 cmake -B build-stm32 -DEP_TARGET=stm32f4_freertos \
       -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/arm-none-eabi.cmake \
       -DEP_CUBE_DIR=/path/to/cubemx_project -DEP_FREERTOS_DIR=/path/to/FreeRTOS-Kernel
 ```
+```bash
+cmake -B build-ucos2 -DEP_TARGET=stm32f4_ucos2 \
+      -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/arm-none-eabi.cmake -DEP_CUBE_DIR=/path/to/cubemx_project \
+      -DEP_UCOS2_DIR=/path/to/uC-OS2 -DEP_UCOS2_PORT_DIR=/path/to/uC-OS2/Ports/ARM-Cortex-M/ARMv7-M/GNU \
+      -DEP_UCOS_CFG_DIR=/path/to/ucos_config
+```
+```bash
+cmake -B build-ucos3 -DEP_TARGET=stm32f4_ucos3 \
+      -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/arm-none-eabi.cmake -DEP_CUBE_DIR=/path/to/cubemx_project \
+      -DEP_UCOS3_DIR=/path/to/uC-OS3 -DEP_UCOS3_PORT_DIR=/path/to/uC-OS3/Ports/ARM-Cortex-M/ARMv7-M/GNU \
+      -DEP_UCCPU_DIR=/path/to/uC-CPU -DEP_UCCPU_PORT_DIR=/path/to/uC-CPU/ARM-Cortex-M/ARMv7-M/GNU \
+      -DEP_UCLIB_DIR=/path/to/uC-LIB -DEP_UCOS_CFG_DIR=/path/to/ucos_config
+```
 
-Xem yêu cầu cấu hình CubeMX ở đầu `cmake/targets/stm32f4_freertos.cmake`.
-Port STM32 và FreeRTOS là **mẫu tham khảo** – chưa được biên dịch/kiểm thử trên phần cứng thật trong repo này.
+Yêu cầu CubeMX chung: `cmake/targets/common/stm32f4_cube.cmake`. Riêng uC/OS: tắt sinh handler PendSV và SysTick
+trong CubeMX (target tự định nghĩa và chuyển cho `OS_CPU_PendSVHandler`/`OS_CPU_SysTickHandler`); cấu hình
+`os_cfg.h` tối thiểu ghi ở đầu `osal_ucos2.cpp` / `osal_ucos3.cpp`. Đường dẫn port CPU ở trên theo bố cục
+repo mã nguồn mở của Micrium (weston-embedded); bản Micrium cũ có thể đặt khác – chỉ cần trỏ đúng thư mục.
+
+**Mức độ kiểm chứng:** các target STM32 (cả 3 RTOS) là **mẫu tham khảo – chưa được biên dịch với toolchain ARM hay
+chạy trên phần cứng thật** trong repo này. Riêng hai port OSAL uC/OS-II/III đã được biên dịch (`-Wall -Wextra`, không
+warning) và chạy toàn bộ unit test cùng firmware mô phỏng trên một bản **giả lập API uC/OS bằng pthread** (không
+nằm trong repo), nên logic port đã được kiểm tra; các khác biệt của kernel thật (lập lịch theo priority, ngắt,
+port CPU) vẫn cần kiểm thử trên board.
 
 ---
 
 ## 8. Quy ước code cho môi trường nhúng
 
 - C++17, `-fno-exceptions -fno-rtti`; lỗi trả về `core::Status`.
-- Không `new`/`malloc` trực tiếp sau khi khởi động: dùng `std::array`, `static` object, stack cấp phát tĩnh cho thread.
+- Không cấp phát động sau khi khởi động (bộ chặn heap kiểm chứng lúc chạy): dùng `std::array`, `static` object,
+  stack tĩnh cho thread, pool tĩnh cho payload. Không tạo thread mới lúc chạy trừ khi tự mang stack tĩnh.
   Bộ nhớ động cho payload chỉ đi qua `svc::Buffer` + allocator mà sản phẩm chọn (mặc định nên là pool tĩnh).
 - Không dùng `std::string`, `std::vector`, `iostream` trong firmware (chỉ được dùng trong test / port host).
 - Khởi tạo hai pha (`init()` sau constructor) cho object phụ thuộc phần cứng.

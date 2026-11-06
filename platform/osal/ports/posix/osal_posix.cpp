@@ -5,6 +5,7 @@
 #include <pthread.h>
 #endif
 
+#include "osal/memory.hpp"
 #include "osal/osal.hpp"
 
 namespace osal {
@@ -70,9 +71,16 @@ Thread::~Thread() { join(); }
 
 core::Status Thread::start(const ThreadConfig& cfg, Entry entry, void* arg) {
     if (started_ || entry == nullptr) return core::Status::InvalidArg;
+    // std::thread tự quản stack, nhưng vẫn trừ vào vùng stack tĩnh như trên MCU để bản mô phỏng
+    // phát hiện cùng lỗi: hết vùng stack, hoặc tạo thread không có stack sau khi khởi động xong.
+    const bool pooled = cfg.stack_mem == nullptr;
+    if (pooled && allocate_stack(cfg.stack_bytes) == nullptr) return core::Status::NoMemory;
     entry_   = entry;
     arg_     = arg;
-    h_.t     = std::thread(&Thread::trampoline, this);
+    {
+        detail::HostAllocationExemption host_only;   // std::thread cấp phát nội bộ – không có trên MCU
+        h_.t = std::thread(&Thread::trampoline, this);
+    }
     started_ = true;
 #if defined(__linux__)
     char name[16] = {};
@@ -81,12 +89,14 @@ core::Status Thread::start(const ThreadConfig& cfg, Entry entry, void* arg) {
 #else
     (void)cfg;
 #endif
-    // Priority/stack bị bỏ qua trên host – đủ cho mô phỏng và unit test.
+    // Priority không áp dụng trên host (cần quyền realtime) – đủ cho mô phỏng và test.
+    detail::register_thread(this, ThreadInfo{cfg.name ? cfg.name : "ep", cfg.priority, cfg.stack_bytes, pooled});
     return core::Status::Ok;
 }
 
 void Thread::join() {
     if (started_ && h_.t.joinable()) h_.t.join();
+    if (started_) detail::unregister_thread(this);
     started_ = false;
 }
 

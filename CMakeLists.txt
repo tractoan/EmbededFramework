@@ -51,7 +51,8 @@ add_subdirectory(${EP_PRODUCT_DIR} product)
 
 # main.cpp ở thư mục gốc: một entry point duy nhất cho mọi target & sản phẩm.
 add_executable(firmware main.cpp)
-target_link_libraries(firmware PRIVATE ep_product ep_target ${EP_TARGET_LIBS})
+# ep_heap_guard: phát hiện mọi cấp phát heap sau khi khởi động xong (osal/memory.hpp).
+target_link_libraries(firmware PRIVATE ep_heap_guard ep_product ep_target ${EP_TARGET_LIBS})
 
 if(EP_BUILD_TESTS)
   enable_testing()

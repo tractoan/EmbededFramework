@@ -1,4 +1,6 @@
-// Port OSAL cho FreeRTOS (yêu cầu configSUPPORT_STATIC_ALLOCATION = 1).
+// Port OSAL cho FreeRTOS – chỉ dùng API cấp phát TĨNH (configSUPPORT_STATIC_ALLOCATION = 1,
+// có thể đặt configSUPPORT_DYNAMIC_ALLOCATION = 0 và bỏ heap_x.c khỏi build).
+#include "osal/memory.hpp"
 #include "osal/osal.hpp"
 
 namespace osal {
@@ -8,15 +10,10 @@ TickType_t to_ticks(std::uint32_t ms) {
     return ms == kWaitForever ? portMAX_DELAY : pdMS_TO_TICKS(ms);
 }
 
+// Mức logic 0..15 -> tskIDLE_PRIORITY..configMAX_PRIORITIES-1, tuyến tính (số lớn = ưu tiên cao).
 UBaseType_t to_native(Priority p) {
-    switch (p) {
-        case Priority::Idle:     return tskIDLE_PRIORITY;
-        case Priority::Low:      return tskIDLE_PRIORITY + 1;
-        case Priority::Normal:   return tskIDLE_PRIORITY + 2;
-        case Priority::High:     return tskIDLE_PRIORITY + 3;
-        case Priority::Realtime: return configMAX_PRIORITIES - 1;
-    }
-    return tskIDLE_PRIORITY + 2;
+    constexpr UBaseType_t span = (configMAX_PRIORITIES - 1u) - tskIDLE_PRIORITY;
+    return tskIDLE_PRIORITY + (span * p.level() + Priority::kMax / 2u) / Priority::kMax;
 }
 }  // namespace
 
@@ -49,21 +46,23 @@ core::Status Thread::start(const ThreadConfig& cfg, Entry entry, void* arg) {
     arg_    = arg;
     h_.done = xSemaphoreCreateBinaryStatic(&h_.done_storage);
 
+    // Không bao giờ dùng heap FreeRTOS: stack do người gọi cấp, hoặc lấy từ vùng stack tĩnh (chỉ khi khởi động).
+    const bool pooled = cfg.stack_mem == nullptr;
+    void* stack       = pooled ? allocate_stack(cfg.stack_bytes) : cfg.stack_mem;
+    if (stack == nullptr) return core::Status::NoMemory;
     const auto depth = static_cast<configSTACK_DEPTH_TYPE>(cfg.stack_bytes / sizeof(StackType_t));
-    if (cfg.stack_mem != nullptr) {
-        h_.handle = xTaskCreateStatic(&Thread::trampoline, cfg.name, depth, this, to_native(cfg.priority),
-                                      static_cast<StackType_t*>(cfg.stack_mem), &h_.tcb);
-        if (h_.handle == nullptr) return core::Status::Error;
-    } else if (xTaskCreate(&Thread::trampoline, cfg.name, depth, this, to_native(cfg.priority), &h_.handle) != pdPASS) {
-        return core::Status::NoMemory;
-    }
+    h_.handle = xTaskCreateStatic(&Thread::trampoline, cfg.name, depth, this, to_native(cfg.priority),
+                                  static_cast<StackType_t*>(stack), &h_.tcb);
+    if (h_.handle == nullptr) return core::Status::Error;
     started_ = true;
+    detail::register_thread(this, ThreadInfo{cfg.name ? cfg.name : "ep", cfg.priority, cfg.stack_bytes, pooled});
     return core::Status::Ok;
 }
 
 void Thread::join() {
     if (!started_) return;
     xSemaphoreTake(h_.done, portMAX_DELAY);
+    detail::unregister_thread(this);
     started_ = false;
 }
 

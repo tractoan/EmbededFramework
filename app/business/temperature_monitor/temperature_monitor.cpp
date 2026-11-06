@@ -18,7 +18,7 @@ TemperatureMonitor::TemperatureMonitor(const Config& cfg)
           {params::kTempSamplePeriodMs, "temp.period_ms", cfg.sample_period_ms, 100, 60000, "ms"},
           {params::kTempOffsetDeci, "temp.offset", 0, -100, 100, "0.1C"},
           {params::kTempFilterWindow, "temp.filter_n", cfg.filter_window, 1, static_cast<std::int32_t>(kMaxWindow), ""},
-          {params::kTempBatchSize, "temp.batch_n", cfg.batch_size, 0, kMaxBatch, "samples"},
+          {params::kTempBatchSize, "temp.batch_n", cfg.batch_size, 0, cfg.max_batch_size, "samples"},
       }} {}
 
 core::Status TemperatureMonitor::on_init(SystemContext& ctx) {
