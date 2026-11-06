@@ -4,6 +4,7 @@
 #include "alarm_controller/alarm_controller.hpp"
 #include "app/product.hpp"
 #include "comm/cli_protocol.hpp"
+#include "services/buffer_allocators.hpp"
 #include "temperature_monitor/temperature_monitor.hpp"
 
 namespace product {
@@ -19,6 +20,12 @@ core::Status setup(app::ProductSetup& s) {
     ac.warn_deci = 450;
     ac.high_deci = 550;
     ac.latch     = false;
+
+    // MCU nhỏ: một pool tĩnh 4 x 128 B, không heap. Lô mặc định tắt (batch_size = 0);
+    // bật bằng "param set temp.batch_n <n>" với n <= 52 mẫu.
+    static svc::StaticBlockPool<128, 4> pool_blocks;
+    static svc::PoolAllocator pool({&pool_blocks});
+    svc::Buffer::set_default_allocator(&pool);
 
     static app::TemperatureMonitor temperature(tc);
     static app::AlarmController alarm(ac);

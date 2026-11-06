@@ -2,6 +2,7 @@
 add_executable(ep_tests
   test_main.cpp
   test_utils.cpp
+  test_buffer.cpp
   test_osal.cpp
   test_event_bus.cpp
   test_param_store.cpp

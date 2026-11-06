@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "osal/time.hpp"
+#include "services/buffer.hpp"
 
 namespace app {
 
@@ -26,7 +27,7 @@ core::Status System::init(const char* product_name, ProductSetupFn setup) {
     params_.init(board_.storage(), &bus_);
     param_cli_.init(&params_);
     commands_.register_command({"param", "list | get <n> | set <n> <v> | save | reset", &param_cli_});
-    commands_.register_command({"sys", "info | modules | log <0-5> | reboot | quit", &sys_cli_});
+    commands_.register_command({"sys", "info | modules | buffers | log <0-5> | reboot | quit", &sys_cli_});
     leds_.bind(svc::LedId::Status, board_.gpio(hal::GpioId::StatusLed));
     leds_.bind(svc::LedId::Alarm, board_.gpio(hal::GpioId::AlarmLed));
 
@@ -109,6 +110,26 @@ int System::SysCli::on_command(int argc, char** argv, svc::CommandOutput& out) {
         }
         return 0;
     }
+    if (std::strcmp(sub, "buffers") == 0) {
+        const svc::IBufferAllocator* a = svc::Buffer::default_allocator();
+        if (a == nullptr) {
+            out.print("no buffer allocator configured\r\n");
+            return 0;
+        }
+        for (std::size_t i = 0; i < a->pool_count(); ++i) {
+            const svc::PoolStats p = a->pool_stats(i);
+            if (p.block_size == 0) {
+                out.print("  heap        used=%lu/%lu B  peak=%lu B  failures=%lu\r\n", static_cast<unsigned long>(p.used),
+                          static_cast<unsigned long>(p.capacity), static_cast<unsigned long>(p.peak),
+                          static_cast<unsigned long>(p.failures));
+            } else {
+                out.print("  pool %5lu B used=%lu/%lu  peak=%lu  failures=%lu\r\n", static_cast<unsigned long>(p.block_size),
+                          static_cast<unsigned long>(p.used), static_cast<unsigned long>(p.capacity),
+                          static_cast<unsigned long>(p.peak), static_cast<unsigned long>(p.failures));
+            }
+        }
+        return 0;
+    }
     if (std::strcmp(sub, "log") == 0 && argc >= 3) {
         const int lvl = std::atoi(argv[2]);
         if (lvl < 0 || lvl > 5) return -1;
@@ -121,7 +142,7 @@ int System::SysCli::on_command(int argc, char** argv, svc::CommandOutput& out) {
         sys_.request_shutdown();
         return 0;
     }
-    out.print("usage: sys info | modules | log <0-5> | reboot | quit\r\n");
+    out.print("usage: sys info | modules | buffers | log <0-5> | reboot | quit\r\n");
     return -1;
 }
 

@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <cstddef>
+#include <utility>
 
 #include "osal/mutex.hpp"
 #include "osal/semaphore.hpp"
@@ -32,7 +33,10 @@ public:
         if (!items_.take(timeout_ms)) return false;
         {
             LockGuard g(mtx_);
-            out = buf_[head_];
+            // Move ra rồi xóa slot: phần tử giữ tài nguyên (vd. svc::Buffer đếm tham chiếu)
+            // được nhả ngay khi người nhận dùng xong, không bị slot cũ giữ lại.
+            out           = std::move(buf_[head_]);
+            buf_[head_]   = T{};
             head_ = (head_ + 1) % N;
             --count_;
         }

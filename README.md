@@ -27,7 +27,7 @@ Mục tiêu:
 ├────────────────────────────────────────────────────────────────────────┤
 │ SERVICES (services/)                                                   │
 │  EventBus · ParamStore(NV+CRC) · CommandService(bảng lệnh) · Logger    │
-│  LedService                                                            │
+│  LedService · Buffer + allocator (Pool / Heap / Chain) cho payload lớn │
 ╞═════════════════════════ PLATFORM (platform/) ═════════════════════════╡
 │ DEVICE (device/)  thiết bị NGOÀI chip: Tmp102 : ITemperatureSensor     │
 ├──────────────────────────────────┬─────────────────────────────────────┤
@@ -108,7 +108,8 @@ EmbededFramework/
 │       ├── linux_sim/          # tham số dòng lệnh, Ctrl+C, --run-for
 │       └── stm32f4_freertos/   # HAL_Init, clock, ngoại vi CubeMX, start scheduler, hook FreeRTOS
 ├── services/
-│   └── include/services/       # event_bus, param_store, command_service, logger, led_service
+│   └── include/services/       # event_bus, param_store, command_service, logger, led_service,
+│                               # buffer, buffer_allocators
 ├── communication/
 │   ├── link/                   # byte_stream, protocol, link_manager      (ep_comm)
 │   ├── cli/                    # cli_protocol                             (ep_proto_cli)
@@ -149,7 +150,43 @@ EmbededFramework/
 - Mỗi kênh truyền thông có một thread RX riêng; LED có thread riêng. Dữ liệu chia sẻ sang thread khác dùng `std::atomic` hoặc đi qua event.
 - Handler lệnh / giao thức chạy trên thread của kênh ⇒ **không sửa trạng thái module trực tiếp**, mà publish event yêu cầu
   (ví dụ `alarm ack` hoặc coil Modbus 0 → `kAlarmAckRequest`).
-- Event là struct kích thước cố định, copy theo giá trị, payload `trivially_copyable` (kiểm tra bằng `static_assert`).
+- Event được copy theo giá trị qua bus/queue. Payload nhỏ nằm inline (`trivially_copyable`, ≤ 16 B, kiểm tra bằng
+  `static_assert`); payload lớn đi kèm `svc::Buffer` (xem dưới).
+
+### Payload lớn & kích thước thay đổi: `svc::Buffer`
+
+```
+Event { id, size, timestamp, payload[16] (header nhỏ inline), buffer ──► [refs|cap|len|owner][ dữ liệu ... ] }
+                                                                      └── cấp từ IBufferAllocator
+```
+
+```cpp
+svc::Buffer data = svc::Buffer::allocate(n * sizeof(int16_t));           // kích thước bất kỳ, lúc chạy
+std::memcpy(data.data(), samples, data.size());                           // GHI trước khi publish
+bus.publish(svc::Event::make(kTemperatureBatch, TemperatureBatch{n, ...}, std::move(data)));
+
+void on_event(const svc::Event& e) {                                      // mọi listener đọc CÙNG vùng nhớ
+    TemperatureBatch hdr{};
+    if (e.id == kTemperatureBatch && e.get(hdr)) process(e.buffer.data(), e.buffer.size());
+}
+```
+
+- **Đếm tham chiếu, không copy dữ liệu:** copy `Event` (vào queue, cho từng listener) chỉ tăng tham chiếu;
+  tham chiếu cuối cùng bị hủy → block tự trả về đúng allocator đã cấp. `osal::Queue` move phần tử ra và xóa slot,
+  nên queue không giữ bộ nhớ lại.
+- **Quyền sở hữu:** chủ tạo ghi dữ liệu rồi `std::move` vào Event; sau khi publish, buffer là **chỉ đọc**.
+  Listener muốn giữ lâu hơn `on_event()` thì copy `Buffer`/`Event`.
+- **Allocator thay được theo sản phẩm** (`Buffer::set_default_allocator()` trong `product::setup()`):
+
+| Allocator | Cơ chế | Khi nào dùng |
+|---|---|---|
+| `PoolAllocator` + `StaticBlockPool<Size, Count>` | Nhiều lớp kích thước, bộ nhớ tĩnh, O(1), không phân mảnh; lớp vừa nhất hết → lấy lớp lớn hơn | Mặc định cho MCU, hệ thời gian thực |
+| `HeapAllocator(budget)` | `malloc`/`free` có giới hạn tổng byte | Payload rất lớn / khó đoán; MCU có RAM dư, Linux |
+| `ChainAllocator(primary, fallback)` | Thử allocator chính, hết thì dùng dự phòng | Pool cho trường hợp thường, heap cho trường hợp hiếm |
+
+  Cấp phát thất bại trả về `Buffer` rỗng (không crash); số lần thất bại, mức dùng và đỉnh xem bằng `sys buffers`.
+  Ví dụ: `thermo_pro` = pool 64 B×16 / 512 B×8 / 2 KB×4 → heap 64 KB; `thermo_lite` = một pool 128 B×4, không heap.
+  Allocator thread-safe (vùng găng ngắn); **chưa** hỗ trợ cấp phát trong ISR.
 
 ### Trình tự khởi động (`app::System::init`)
 
@@ -171,6 +208,7 @@ EmbededFramework/
 | **Cấu hình module (compile-time)** | `Module::Config` truyền vào constructor | ngưỡng, chu kỳ mẫu, latch theo từng sản phẩm |
 | **Cấu hình hệ thống (compile-time)** | `product_config.hpp` override `EP_CFG_*` | độ sâu queue, số module, mức log tối thiểu |
 | **Tham số runtime** | `ParamStore` + CLI `param set/save`, sự kiện `kParamChanged` | đổi `alarm.high` khi đang chạy, lưu Flash |
+| **Bộ nhớ payload lớn** | Allocator của `svc::Buffer` chọn trong `product::setup()` | pool tĩnh cho MCU nhỏ, pool + heap cho bản cao cấp |
 | **Mở rộng hành vi** | Module mới / state mới trong `StateMachine` | thêm trạng thái `Maintenance` |
 | **Module riêng của sản phẩm** | Đặt trong `products/<p>/` | `products/thermo_pro/stats_reporter.hpp` |
 | **Giao thức truyền thông** | Kênh + giao thức trong `product::setup()`, tham số `comm.<kênh>` | xem mục 5 |
@@ -372,7 +410,7 @@ Lệnh CLI:
 
 ```
 help                         danh sách lệnh
-sys info | modules | log <0-5> | reboot | quit
+sys info | modules | buffers | log <0-5> | reboot | quit
 param list | get <n> | set <n> <v> | save | reset
 temp                         nhiệt độ hiện tại, thống kê
 alarm status | ack           trạng thái cảnh báo / xác nhận
@@ -395,7 +433,8 @@ Port STM32 và FreeRTOS là **mẫu tham khảo** – chưa được biên dịc
 ## 8. Quy ước code cho môi trường nhúng
 
 - C++17, `-fno-exceptions -fno-rtti`; lỗi trả về `core::Status`.
-- Không `new`/`malloc` sau khi khởi động: dùng `std::array`, `static` object, stack cấp phát tĩnh cho thread.
+- Không `new`/`malloc` trực tiếp sau khi khởi động: dùng `std::array`, `static` object, stack cấp phát tĩnh cho thread.
+  Bộ nhớ động cho payload chỉ đi qua `svc::Buffer` + allocator mà sản phẩm chọn (mặc định nên là pool tĩnh).
 - Không dùng `std::string`, `std::vector`, `iostream` trong firmware (chỉ được dùng trong test / port host).
 - Khởi tạo hai pha (`init()` sau constructor) cho object phụ thuộc phần cứng.
 - API gọi được từ ISR chỉ có hậu tố `_from_isr`. Logger không được gọi trong ISR.

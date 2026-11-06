@@ -8,6 +8,7 @@ namespace app::params {
 inline constexpr svc::ParamId kTempSamplePeriodMs = 0x1001;
 inline constexpr svc::ParamId kTempOffsetDeci     = 0x1002;
 inline constexpr svc::ParamId kTempFilterWindow   = 0x1003;
+inline constexpr svc::ParamId kTempBatchSize      = 0x1004;
 
 // AlarmController: 0x1100..0x11FF
 inline constexpr svc::ParamId kAlarmWarnDeci       = 0x1101;

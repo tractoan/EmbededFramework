@@ -12,6 +12,15 @@ inline constexpr EventId kSensorFault       = svc::evt::kAppBase + 2;   // (none
 inline constexpr EventId kSensorRecovered   = svc::evt::kAppBase + 3;   // (none)
 inline constexpr EventId kAlarmStateChanged = svc::evt::kAppBase + 4;   // AlarmStateChanged
 inline constexpr EventId kAlarmAckRequest   = svc::evt::kAppBase + 5;   // (none)
+inline constexpr EventId kTemperatureBatch  = svc::evt::kAppBase + 6;   // TemperatureBatch + buffer: int16[count]
+
+// Header inline của kTemperatureBatch; dữ liệu nằm trong Event::buffer:
+// `count` mẫu int16 (0.1 °C), theo thứ tự thời gian, cách nhau `period_ms`.
+struct TemperatureBatch {
+    std::uint16_t count;
+    std::uint16_t period_ms;
+    std::uint32_t first_sample_ms;
+};
 
 struct TemperatureSample {
     std::int32_t deci_celsius;

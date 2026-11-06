@@ -2,8 +2,10 @@
 #include <cstdint>
 #include <cstring>
 #include <type_traits>
+#include <utility>
 
 #include "core/config.hpp"
+#include "services/buffer.hpp"
 
 namespace svc {
 
@@ -21,12 +23,18 @@ inline constexpr EventId kSystemShutdown = kSystemBase + 2;
 inline constexpr EventId kParamChanged   = kServiceBase + 1;   // payload: svc::ParamChanged
 }  // namespace evt
 
-// Event kích thước cố định, copy theo giá trị -> an toàn đưa qua queue giữa các thread.
+// Event = message đi qua EventBus / queue, copy theo giá trị -> an toàn giữa các thread.
+// Hai phần dữ liệu, dùng riêng hoặc kết hợp:
+//   payload : nhỏ (<= EP_CFG_EVENT_PAYLOAD_SIZE), nằm ngay trong Event, không cấp phát.
+//   buffer  : lớn / kích thước thay đổi, svc::Buffer đếm tham chiếu – copy Event chỉ tăng
+//             tham chiếu, mọi listener dùng chung một vùng nhớ, tự giải phóng khi hết người dùng.
+// Mẫu thường gặp: payload chứa "header" mô tả (số mẫu, định dạng...), buffer chứa dữ liệu.
 struct Event {
     EventId id                 = 0;
-    std::uint16_t size         = 0;
+    std::uint16_t size         = 0;   // kích thước payload inline
     std::uint32_t timestamp_ms = 0;
     alignas(8) std::uint8_t payload[core::cfg::kEventPayloadSize]{};
+    Buffer buffer;                    // payload lớn (tùy chọn)
 
     static Event make(EventId id) {
         Event e;
@@ -42,6 +50,22 @@ struct Event {
         e.id   = id;
         e.size = static_cast<std::uint16_t>(sizeof(T));
         std::memcpy(e.payload, &data, sizeof(T));
+        return e;
+    }
+
+    // Payload lớn (không có header inline)
+    static Event make(EventId id, Buffer data) {
+        Event e;
+        e.id     = id;
+        e.buffer = std::move(data);
+        return e;
+    }
+
+    // Header nhỏ inline + payload lớn
+    template <typename T>
+    static Event make(EventId id, const T& header, Buffer data) {
+        Event e  = make(id, header);
+        e.buffer = std::move(data);
         return e;
     }
 

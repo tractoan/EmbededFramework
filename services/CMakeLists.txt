@@ -1,6 +1,7 @@
 # Services: dịch vụ hệ thống dùng chung, không chứa nghiệp vụ sản phẩm.
 # Đứng trên platform (core, osal, hal, device).
 add_library(ep_services STATIC
+  src/buffer.cpp
   src/logger.cpp
   src/event_bus.cpp
   src/param_store.cpp
