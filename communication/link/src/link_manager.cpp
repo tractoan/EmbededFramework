@@ -22,7 +22,7 @@ core::Status LinkManager::init(Services& services) {
 }
 
 core::Status LinkManager::add_channel(const char* name, IByteStream* stream, std::initializer_list<IProtocol*> protocols,
-                                      ProtocolId default_protocol) {
+                                      ProtocolId default_protocol, osal::Priority priority, std::size_t stack_bytes) {
     if (services_ == nullptr || name == nullptr || stream == nullptr) return core::Status::InvalidArg;
     if (count_ >= channels_.size() || protocols.size() > core::cfg::kCommMaxProtocols) return core::Status::NoMemory;
     if (find_channel(name) != nullptr) return core::Status::Busy;
@@ -32,6 +32,8 @@ core::Status LinkManager::add_channel(const char* name, IByteStream* stream, std
     ch.name   = name;
     ch.stream = stream;
     ch.tx.bind(stream);
+    ch.priority    = priority;
+    ch.stack_bytes = stack_bytes;
     ch.n_protocols = 0;
     for (IProtocol* p : protocols) {
         if (p == nullptr) return core::Status::InvalidArg;
@@ -53,7 +55,7 @@ core::Status LinkManager::start() {
         Channel& ch = channels_[i];
         ch.requested = services_->params.get_or(ch.def.id, ch.def.default_value);
         ch.running   = true;
-        const core::Status st = ch.thread.start(osal::ThreadConfig{ch.name, osal::Priority::Normal, 4096, nullptr},
+        const core::Status st = ch.thread.start(osal::ThreadConfig{ch.name, ch.priority, ch.stack_bytes, nullptr},
                                                 &osal::Thread::invoke<Channel, &Channel::run>, &ch);
         if (!core::is_ok(st)) return st;
     }

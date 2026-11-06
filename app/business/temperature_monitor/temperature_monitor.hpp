@@ -18,6 +18,7 @@ public:
         std::int32_t filter_window    = 4;    // 1..8
         std::uint8_t fault_threshold  = 3;    // số lần đọc lỗi liên tiếp -> Fault
         std::int32_t batch_size       = 0;    // số mẫu mỗi lô kTemperatureBatch (0 = tắt)
+        std::int32_t max_batch_size   = 64;   // giới hạn của temp.batch_n – đặt theo pool của sản phẩm
     };
 
     explicit TemperatureMonitor(const Config& cfg);
@@ -34,7 +35,6 @@ public:
 
 private:
     static constexpr std::size_t kMaxWindow = 8;
-    static constexpr std::int32_t kMaxBatch = 4096;
     void apply_params();
     std::int32_t filter(std::int32_t sample);
     void add_to_batch(std::int32_t value, std::uint64_t now_ms);

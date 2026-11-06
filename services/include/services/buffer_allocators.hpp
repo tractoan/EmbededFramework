@@ -1,10 +1,10 @@
 #pragma once
-// Các chiến lược cấp phát cho svc::Buffer.
+// Các chiến lược cấp phát cho svc::Buffer – TẤT CẢ dùng bộ nhớ tĩnh, không dùng heap.
 //
 //   PoolAllocator  – nhiều lớp kích thước cố định, bộ nhớ tĩnh: O(1), không phân mảnh,
-//                    tất định -> khuyến nghị cho MCU. Lớp vừa nhất hết chỗ -> dùng lớp lớn hơn.
-//   HeapAllocator  – malloc/free có giới hạn tổng byte: cho payload rất lớn / kích thước khó đoán.
-//   ChainAllocator – thử allocator chính trước, hết thì dùng allocator dự phòng (vd. pool -> heap).
+//                    tất định. Lớp vừa nhất hết chỗ -> dùng lớp lớn hơn.
+//   ChainAllocator – thử allocator chính trước, hết thì dùng allocator dự phòng
+//                    (vd. pool chung -> pool dự trữ riêng cho dữ liệu quan trọng).
 //
 //   static svc::StaticBlockPool<64, 16>   small;
 //   static svc::StaticBlockPool<512, 8>   medium;
@@ -81,23 +81,6 @@ public:
 private:
     std::array<BlockPool*, EP_CFG_MAX_BUFFER_POOLS> pools_{};
     std::size_t count_ = 0;
-};
-
-class HeapAllocator final : public IBufferAllocator, private core::NonCopyable {
-public:
-    explicit HeapAllocator(std::size_t budget_bytes) : budget_(budget_bytes) {}
-
-    void* allocate(std::size_t bytes, std::size_t& capacity) override;
-    void release(void* block) override;
-    bool owns(const void* block) const override { return block != nullptr; }
-    std::size_t pool_count() const override { return 1; }
-    PoolStats pool_stats(std::size_t index) const override;
-
-private:
-    std::size_t budget_;
-    std::size_t used_       = 0;
-    std::size_t peak_       = 0;
-    std::uint32_t failures_ = 0;
 };
 
 class ChainAllocator final : public IBufferAllocator, private core::NonCopyable {

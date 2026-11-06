@@ -12,7 +12,6 @@
 #include <algorithm>
 #include <cstring>
 #include <thread>
-#include <vector>
 
 namespace hal::sim {
 
@@ -173,8 +172,14 @@ Status SimFileStorage::write(std::size_t offset, const void* data, std::size_t l
 Status SimFileStorage::erase() {
     FILE* f = std::fopen(path_.c_str(), "wb");
     if (f == nullptr) return Status::Error;
-    std::vector<std::uint8_t> blank(size_, 0xFF);
-    const bool ok = std::fwrite(blank.data(), 1, blank.size(), f) == blank.size();
+    std::uint8_t blank[256];   // không cấp phát động: ghi từng khối 0xFF
+    std::memset(blank, 0xFF, sizeof(blank));
+    bool ok = true;
+    for (std::size_t done = 0; ok && done < size_;) {
+        const std::size_t n = size_ - done < sizeof(blank) ? size_ - done : sizeof(blank);
+        ok = std::fwrite(blank, 1, n, f) == n;
+        done += n;
+    }
     std::fclose(f);
     return ok ? Status::Ok : Status::Error;
 }

@@ -11,6 +11,7 @@ void MX_I2C1_Init(void);             // CubeMX: i2c.c
 }
 
 #include "hal/board.hpp"
+#include "osal/memory.hpp"
 #include "osal/thread.hpp"
 #include "osal/time.hpp"
 #include "target/target.hpp"
@@ -18,6 +19,9 @@ void MX_I2C1_Init(void);             // CubeMX: i2c.c
 namespace target {
 
 namespace {
+// Cấp phát heap sau khi khởi động xong: vi phạm chính sách bộ nhớ -> reset về trạng thái đã biết.
+void on_heap_violation(std::size_t /*bytes*/) { hal::board().reset(); }
+
 alignas(8) CPU_STK g_init_stack[1024];
 osal::Thread g_init_thread;
 AppMain g_app_main = nullptr;
@@ -39,6 +43,7 @@ void init_task(void*) {
 }  // namespace
 
 void init(int /*argc*/, char** /*argv*/) {
+    osal::set_heap_violation_handler(&on_heap_violation);
     HAL_Init();
     SystemClock_Config();
     MX_GPIO_Init();

@@ -34,5 +34,10 @@ set(EP_STM32_CUBE_INCLUDES
     ${EP_CUBE_DIR}/Drivers/CMSIS/Include)
 set(EP_STM32_CUBE_DEFINES STM32F407xx USE_HAL_DRIVER)
 
+# Bộ chặn heap: bọc cả malloc/calloc/realloc của newlib (không chỉ operator new), để mọi cấp phát
+# sau osal::end_startup() đều bị phát hiện – kể cả cấp phát ẩn trong thư viện C.
+set(EP_HEAP_GUARD_DEFINES EP_HEAP_GUARD_WRAP_MALLOC)
+add_link_options(-Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc)
+
 # Mã khởi động dùng chung, biên dịch vào ep_target cùng với platform/target/<EP_TARGET>/
 set(EP_TARGET_EXTRA_SOURCES ${PROJECT_SOURCE_DIR}/platform/target/common/stm32f4/clock_config.c)

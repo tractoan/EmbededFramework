@@ -6,33 +6,22 @@
 //   OS_CFG_SCHED_ROUND_ROBIN_EN              (tùy chọn: yield() nhường task cùng priority)
 // Đặc thù uC/OS-III được xử lý ở đây:
 //   - Timeout 0 + OS_OPT_PEND_BLOCKING = CHỜ MÃI; "không chờ" dùng OS_OPT_PEND_NON_BLOCKING.
-//   - Nhiều task được trùng priority (round-robin) -> mỗi mức osal::Priority là một priority cố định
-//     (EP_UCOS3_PRIO_*), số nhỏ = ưu tiên cao.
+//   - Nhiều task được trùng priority (round-robin) -> mức logic 15 = EP_UCOS3_PRIO_TOP, mỗi mức thấp
+//     hơn +1 (số nhỏ = ưu tiên cao).
 //   - OS_TCB nằm trong Thread: task kết thúc sẽ tự treo, join() xóa task rồi mới trả về.
-//   - Không cấp phát stack động -> stack_mem == nullptr thì lấy từ vùng stack tĩnh
-//     EP_UCOS_STACK_POOL_BYTES (cấp một chiều, không thu hồi).
+//   - Không cấp phát stack động -> stack_mem == nullptr thì lấy từ vùng stack tĩnh chung của OSAL
+//     (osal::allocate_stack, chỉ trong giai đoạn khởi động).
 //   - Mọi object OSAL phải được tạo SAU OSInit() (target::init gọi OSInit đầu tiên).
 #include <cstdint>
 
+#include "osal/memory.hpp"
 #include "osal/osal.hpp"
 
-#ifndef EP_UCOS_STACK_POOL_BYTES
-#define EP_UCOS_STACK_POOL_BYTES (24u * 1024u)
+#ifndef EP_UCOS3_PRIO_TOP
+#define EP_UCOS3_PRIO_TOP 4u   // priority native của mức logic cao nhất (0..3 dành cho task hệ thống)
 #endif
-#ifndef EP_UCOS3_PRIO_REALTIME
-#define EP_UCOS3_PRIO_REALTIME 4u
-#endif
-#ifndef EP_UCOS3_PRIO_HIGH
-#define EP_UCOS3_PRIO_HIGH 6u
-#endif
-#ifndef EP_UCOS3_PRIO_NORMAL
-#define EP_UCOS3_PRIO_NORMAL 8u
-#endif
-#ifndef EP_UCOS3_PRIO_LOW
-#define EP_UCOS3_PRIO_LOW 10u
-#endif
-#ifndef EP_UCOS3_PRIO_IDLE
-#define EP_UCOS3_PRIO_IDLE (OS_CFG_PRIO_MAX - 3u)   // trên idle task (OS_CFG_PRIO_MAX - 1)
+#if EP_UCOS3_PRIO_TOP + 16u > OS_CFG_PRIO_MAX - 2u
+#error "EP_UCOS3_PRIO_TOP + 16 mức vượt quá OS_CFG_PRIO_MAX: tăng OS_CFG_PRIO_MAX"
 #endif
 
 namespace osal {
@@ -58,28 +47,7 @@ bool sem_take(OS_SEM* s, std::uint32_t timeout_ms) {
     return err == OS_ERR_NONE;
 }
 
-alignas(8) CPU_STK g_stack_pool[EP_UCOS_STACK_POOL_BYTES / sizeof(CPU_STK)];
-std::size_t g_stack_used = 0;
-
-CPU_STK* alloc_stack(std::size_t count) {
-    CriticalSection cs;
-    count = (count + 1u) & ~std::size_t{1u};
-    if (count > sizeof(g_stack_pool) / sizeof(CPU_STK) - g_stack_used) return nullptr;
-    CPU_STK* p = &g_stack_pool[g_stack_used];
-    g_stack_used += count;
-    return p;
-}
-
-OS_PRIO to_native(Priority p) {
-    switch (p) {
-        case Priority::Realtime: return EP_UCOS3_PRIO_REALTIME;
-        case Priority::High:     return EP_UCOS3_PRIO_HIGH;
-        case Priority::Normal:   return EP_UCOS3_PRIO_NORMAL;
-        case Priority::Low:      return EP_UCOS3_PRIO_LOW;
-        case Priority::Idle:     return EP_UCOS3_PRIO_IDLE;
-    }
-    return EP_UCOS3_PRIO_NORMAL;
-}
+OS_PRIO to_native(Priority p) { return static_cast<OS_PRIO>(EP_UCOS3_PRIO_TOP + (Priority::kMax - p.level())); }
 
 CPU_CHAR* name_of(const char* n) { return reinterpret_cast<CPU_CHAR*>(const_cast<char*>(n ? n : "ep")); }
 
@@ -149,7 +117,8 @@ core::Status Thread::start(const ThreadConfig& cfg, Entry entry, void* arg) {
     if (started_ || entry == nullptr) return core::Status::InvalidArg;
     const std::size_t n = cfg.stack_bytes / sizeof(CPU_STK);
     if (n < 64u) return core::Status::InvalidArg;
-    CPU_STK* stk = cfg.stack_mem != nullptr ? static_cast<CPU_STK*>(cfg.stack_mem) : alloc_stack(n);
+    const bool pooled = cfg.stack_mem == nullptr;
+    auto* stk = static_cast<CPU_STK*>(pooled ? allocate_stack(n * sizeof(CPU_STK)) : cfg.stack_mem);
     if (stk == nullptr) return core::Status::NoMemory;
 
     entry_     = entry;
@@ -169,6 +138,7 @@ core::Status Thread::start(const ThreadConfig& cfg, Entry entry, void* arg) {
         return core::Status::Error;
     }
     started_ = true;
+    detail::register_thread(this, ThreadInfo{cfg.name ? cfg.name : "ep", cfg.priority, cfg.stack_bytes, pooled});
     return core::Status::Ok;
 }
 
@@ -180,6 +150,7 @@ void Thread::join() {
 #if OS_CFG_SEM_DEL_EN > 0u
     (void)OSSemDel(&h_.done, OS_OPT_DEL_ALWAYS, &err);
 #endif
+    detail::unregister_thread(this);
     started_ = false;
 }
 

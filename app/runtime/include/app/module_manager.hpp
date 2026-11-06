@@ -16,7 +16,8 @@ class ModuleManager final : public svc::IEventListener, private core::NonCopyabl
 public:
     core::Status add(IModule* module);
     core::Status init_all(SystemContext& ctx);
-    core::Status start();
+    // task: priority/stack của thread nghiệp vụ (stack_mem == nullptr -> lấy từ vùng stack tĩnh)
+    core::Status start(const osal::ThreadConfig& task = osal::ThreadConfig{"app", osal::Priority::Normal, 4096, nullptr});
     void stop();
 
     void on_event(const svc::Event& e) override;   // gọi từ thread bất kỳ, không chặn

@@ -18,7 +18,8 @@ using ProductSetupFn = core::Status (*)(ProductSetup& setup);
 // Trình tự boot:
 //   board.init -> logger -> services -> link manager -> devices
 //   -> product::setup (module + kênh/giao thức) -> modules.on_init
-//   -> params.load -> services.start -> modules.on_start -> links.start -> kSystemStarted
+//   -> params.load -> services.start -> modules.on_start -> links.start
+//   -> osal::end_startup() (từ đây cấm cấp phát động) -> kSystemStarted
 class System : core::NonCopyable {
 public:
     explicit System(hal::IBoard& board) : board_(board), sys_cli_(*this) {}
@@ -51,6 +52,7 @@ private:
     svc::LedService leds_;
     device::Tmp102 tmp102_;
     Devices devices_;
+    TaskPlan tasks_;
     ModuleManager modules_;
     comm::UartStream console_stream_;
     comm::Services comm_services_{bus_, params_, commands_};

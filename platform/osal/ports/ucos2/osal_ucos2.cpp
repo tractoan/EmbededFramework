@@ -6,40 +6,30 @@
 //   OS_SEM_DEL_EN, OS_MUTEX_DEL_EN        (tùy chọn: hủy object khi destructor chạy)
 //   OS_CRITICAL_METHOD = 3                (os_cpu.h của port CPU)
 // Đặc thù uC/OS-II được xử lý ở đây:
-//   - Mỗi task phải có priority DUY NHẤT -> mỗi mức osal::Priority là một dải, port tự lấy
-//     priority trống đầu tiên trong dải (EP_UCOS2_PRIO_*, EP_UCOS2_PRIO_BAND).
+//   - Mỗi task phải có priority DUY NHẤT -> mỗi mức logic (0..15) là một dải EP_UCOS2_PRIO_STRIDE
+//     priority native liên tiếp, bắt đầu từ EP_UCOS2_PRIO_TOP cho mức 15; port lấy priority trống
+//     đầu tiên trong dải (tối đa EP_UCOS2_PRIO_STRIDE task cùng mức).
 //   - Timeout 0 của OSxxxPend nghĩa là CHỜ MÃI -> "không chờ" dùng OSSemAccept/OSMutexAccept.
 //   - Không cấp phát stack động -> ThreadConfig::stack_mem == nullptr thì lấy từ vùng stack tĩnh
-//     EP_UCOS_STACK_POOL_BYTES (cấp một chiều, không thu hồi).
+//     chung của OSAL (osal::allocate_stack, chỉ trong giai đoạn khởi động).
 //   - Mọi object OSAL phải được tạo SAU OSInit() (target::init gọi OSInit đầu tiên).
 #include <cstdint>
 
+#include "osal/memory.hpp"
 #include "osal/osal.hpp"
 
 #if OS_CRITICAL_METHOD != 3u
 #error "OSAL uC/OS-II port requires OS_CRITICAL_METHOD == 3"
 #endif
 
-#ifndef EP_UCOS_STACK_POOL_BYTES
-#define EP_UCOS_STACK_POOL_BYTES (24u * 1024u)
+#ifndef EP_UCOS2_PRIO_TOP
+#define EP_UCOS2_PRIO_TOP 4u      // priority native của mức logic cao nhất (0..3 dành cho hệ thống)
 #endif
-#ifndef EP_UCOS2_PRIO_BAND
-#define EP_UCOS2_PRIO_BAND 8u
+#ifndef EP_UCOS2_PRIO_STRIDE
+#define EP_UCOS2_PRIO_STRIDE 3u   // số priority native mỗi mức logic = số task tối đa cùng mức
 #endif
-#ifndef EP_UCOS2_PRIO_REALTIME
-#define EP_UCOS2_PRIO_REALTIME 4u
-#endif
-#ifndef EP_UCOS2_PRIO_HIGH
-#define EP_UCOS2_PRIO_HIGH 12u
-#endif
-#ifndef EP_UCOS2_PRIO_NORMAL
-#define EP_UCOS2_PRIO_NORMAL 20u
-#endif
-#ifndef EP_UCOS2_PRIO_LOW
-#define EP_UCOS2_PRIO_LOW 28u
-#endif
-#ifndef EP_UCOS2_PRIO_IDLE
-#define EP_UCOS2_PRIO_IDLE 36u
+#if EP_UCOS2_PRIO_TOP + 16u * EP_UCOS2_PRIO_STRIDE > OS_LOWEST_PRIO - 1u
+#error "EP_UCOS2_PRIO_TOP/STRIDE vượt quá OS_LOWEST_PRIO: tăng OS_LOWEST_PRIO hoặc giảm STRIDE"
 #endif
 
 #if OS_MUTEX_EN > 0u && OS_MUTEX_ACCEPT_EN > 0u && defined(OS_PRIO_MUTEX_CEIL_DIS)
@@ -68,28 +58,9 @@ bool sem_take(OS_EVENT* ev, std::uint32_t timeout_ms) {
     return err == OS_ERR_NONE;
 }
 
-// Vùng stack tĩnh cho thread không tự cung cấp stack.
-alignas(8) OS_STK g_stack_pool[EP_UCOS_STACK_POOL_BYTES / sizeof(OS_STK)];
-std::size_t g_stack_used = 0;
-
-OS_STK* alloc_stack(std::size_t count) {
-    CriticalSection cs;
-    count = (count + 1u) & ~std::size_t{1u};   // giữ căn lề 8 byte với OS_STK 32-bit
-    if (count > sizeof(g_stack_pool) / sizeof(OS_STK) - g_stack_used) return nullptr;
-    OS_STK* p = &g_stack_pool[g_stack_used];
-    g_stack_used += count;
-    return p;
-}
-
+// Mức logic 15 -> EP_UCOS2_PRIO_TOP, mỗi mức thấp hơn lùi EP_UCOS2_PRIO_STRIDE (số nhỏ = ưu tiên cao).
 INT8U band_base(Priority p) {
-    switch (p) {
-        case Priority::Realtime: return EP_UCOS2_PRIO_REALTIME;
-        case Priority::High:     return EP_UCOS2_PRIO_HIGH;
-        case Priority::Normal:   return EP_UCOS2_PRIO_NORMAL;
-        case Priority::Low:      return EP_UCOS2_PRIO_LOW;
-        case Priority::Idle:     return EP_UCOS2_PRIO_IDLE;
-    }
-    return EP_UCOS2_PRIO_NORMAL;
+    return static_cast<INT8U>(EP_UCOS2_PRIO_TOP + (Priority::kMax - p.level()) * EP_UCOS2_PRIO_STRIDE);
 }
 
 }  // namespace
@@ -165,7 +136,8 @@ core::Status Thread::start(const ThreadConfig& cfg, Entry entry, void* arg) {
     if (started_ || entry == nullptr) return core::Status::InvalidArg;
     const std::size_t n = cfg.stack_bytes / sizeof(OS_STK);
     if (n < 64u) return core::Status::InvalidArg;
-    OS_STK* stk = cfg.stack_mem != nullptr ? static_cast<OS_STK*>(cfg.stack_mem) : alloc_stack(n);
+    const bool pooled = cfg.stack_mem == nullptr;
+    auto* stk = static_cast<OS_STK*>(pooled ? allocate_stack(n * sizeof(OS_STK)) : cfg.stack_mem);
     if (stk == nullptr) return core::Status::NoMemory;
 
     entry_  = entry;
@@ -182,12 +154,13 @@ core::Status Thread::start(const ThreadConfig& cfg, Entry entry, void* arg) {
 #endif
 
     const INT8U base = band_base(cfg.priority);
-    for (INT8U p = base; p < base + EP_UCOS2_PRIO_BAND && p < OS_LOWEST_PRIO - 2u; ++p) {
+    for (INT8U p = base; p < base + EP_UCOS2_PRIO_STRIDE; ++p) {
         const INT8U err = OSTaskCreateExt(&Thread::trampoline, this, ptos, p, p, pbos, static_cast<INT32U>(n), nullptr,
                                           OS_TASK_OPT_STK_CHK | OS_TASK_OPT_STK_CLR);
         if (err == OS_ERR_NONE) {
             h_.prio  = p;
             started_ = true;
+            detail::register_thread(this, ThreadInfo{cfg.name ? cfg.name : "ep", cfg.priority, cfg.stack_bytes, pooled});
 #if OS_TASK_NAME_EN > 0u
             INT8U name_err = OS_ERR_NONE;
             OSTaskNameSet(p, reinterpret_cast<INT8U*>(const_cast<char*>(cfg.name ? cfg.name : "ep")), &name_err);
@@ -212,6 +185,7 @@ void Thread::join() {
     OSSemDel(h_.done, OS_DEL_ALWAYS, &err);
 #endif
     h_.done  = nullptr;
+    detail::unregister_thread(this);
     started_ = false;
 }
 
