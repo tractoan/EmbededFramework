@@ -15,7 +15,7 @@
 #include "hal/gpio.hpp"
 #include "hal/storage.hpp"
 #include "device/temperature_sensor.hpp"
-#include "services/event.hpp"
+#include "messaging/event.hpp"
 
 namespace mock {
 
@@ -67,15 +67,15 @@ public:
 };
 
 // Ghi lại mọi event đi qua bus.
-class Recorder final : public svc::IEventListener {
+class Recorder final : public msg::IEventListener {
 public:
-    void on_event(const svc::Event& e) override { events.push_back(e); }
-    std::size_t count(svc::EventId id) const {
+    void on_event(const msg::Event& e) override { events.push_back(e); }
+    std::size_t count(msg::EventId id) const {
         std::size_t n = 0;
         for (const auto& e : events) n += (e.id == id) ? 1 : 0;
         return n;
     }
-    std::vector<svc::Event> events;
+    std::vector<msg::Event> events;
 };
 
 // Stream giả lập kênh truyền: test "gửi" byte vào (feed), đọc lại byte thiết bị trả ra (tx).

@@ -26,7 +26,7 @@ core::Status ModuleManager::init_all(SystemContext& ctx) {
         }
         LOGD(kTag, "init '%s' ok", slots_[i].module->name());
     }
-    return ctx.bus.subscribe(svc::evt::kAny, this);
+    return ctx.bus.subscribe(msg::evt::kAny, this);
 }
 
 core::Status ModuleManager::start(const osal::ThreadConfig& task) {
@@ -46,13 +46,13 @@ core::Status ModuleManager::start(const osal::ThreadConfig& task) {
 }
 
 void ModuleManager::stop() {
-    if (ctx_ != nullptr) ctx_->bus.unsubscribe(svc::evt::kAny, this);
+    if (ctx_ != nullptr) ctx_->bus.unsubscribe(msg::evt::kAny, this);
     running_ = false;
     thread_.join();
     for (std::size_t i = count_; i-- > 0;) slots_[i].module->on_stop();
 }
 
-void ModuleManager::on_event(const svc::Event& e) {
+void ModuleManager::on_event(const msg::Event& e) {
     if (!queue_.send(e, osal::kNoWait)) dropped_.fetch_add(1);
 }
 
@@ -68,7 +68,7 @@ void ModuleManager::process(std::uint32_t max_wait_ms) {
         }
     }
 
-    svc::Event e;
+    msg::Event e;
     if (queue_.receive(e, wait)) {
         for (std::size_t i = 0; i < count_; ++i) slots_[i].module->on_event(e);
     }

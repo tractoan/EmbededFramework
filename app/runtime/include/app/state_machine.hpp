@@ -1,5 +1,5 @@
 #pragma once
-#include "services/event.hpp"
+#include "messaging/event.hpp"
 
 namespace app {
 
@@ -10,12 +10,12 @@ template <typename Owner>
 class StateMachine {
 public:
     enum class Signal : std::uint8_t { Entry, Exit, Event };
-    using State = void (Owner::*)(Signal sig, const svc::Event* e);
+    using State = void (Owner::*)(Signal sig, const msg::Event* e);
 
     StateMachine(Owner& owner, State initial) : owner_(owner), state_(initial) {}
 
     void start() { (owner_.*state_)(Signal::Entry, nullptr); }
-    void dispatch(const svc::Event& e) { (owner_.*state_)(Signal::Event, &e); }
+    void dispatch(const msg::Event& e) { (owner_.*state_)(Signal::Event, &e); }
 
     void transition(State next) {
         if (next == state_) return;

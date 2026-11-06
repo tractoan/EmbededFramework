@@ -1,11 +1,11 @@
 #pragma once
 // Bộ đệm payload kích thước tùy ý, đếm tham chiếu, cấp phát qua allocator thay được.
 //
-//   svc::Buffer buf = svc::Buffer::allocate(1500);       // lấy từ allocator mặc định
+//   msg::Buffer buf = msg::Buffer::allocate(1500);       // lấy từ allocator mặc định
 //   std::memcpy(buf.data(), frame, 1500);                 // GHI trước khi publish
-//   bus.publish(svc::Event::make(kFrame, FrameInfo{...}, std::move(buf)));
+//   bus.publish(msg::Event::make(kFrame, FrameInfo{...}, std::move(buf)));
 //   ...
-//   void on_event(const svc::Event& e) { const svc::Buffer& b = e.buffer; use(b.data(), b.size()); }
+//   void on_event(const msg::Event& e) { const msg::Buffer& b = e.buffer; use(b.data(), b.size()); }
 //
 // Quy ước: chủ sở hữu ghi dữ liệu TRƯỚC khi chia sẻ; sau khi publish, buffer coi như chỉ đọc
 // (mọi listener cùng trỏ tới một vùng nhớ, không copy). Listener muốn giữ lâu hơn on_event()
@@ -15,7 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace svc {
+namespace msg {
 
 // Thống kê một "lớp" của allocator (một pool kích thước cố định).
 struct PoolStats {
@@ -81,4 +81,4 @@ private:
     Header* h_ = nullptr;
 };
 
-}  // namespace svc
+}  // namespace msg

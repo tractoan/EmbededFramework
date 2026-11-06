@@ -5,7 +5,7 @@
 
 #include "osal/memory.hpp"
 #include "osal/time.hpp"
-#include "services/buffer.hpp"
+#include "messaging/buffer.hpp"
 
 namespace app {
 
@@ -84,7 +84,7 @@ core::Status System::init(const char* product_name, ProductSetupFn setup) {
         return st;
     }
 
-    bus_.publish(svc::Event::make(svc::evt::kSystemStarted));
+    bus_.publish(msg::Event::make(app::sys::kSystemStarted));
     // 8. Hết giai đoạn khởi động: mọi thread đã tạo, mọi bộ nhớ đã cấp.
     //    Từ đây cấp phát heap / lấy stack mới là vi phạm (xem osal/memory.hpp).
     osal::end_startup();
@@ -106,7 +106,7 @@ void System::bring_up_devices() {
 
 void System::shutdown() {
     LOGI(kTag, "shutting down...");
-    bus_.publish(svc::Event::make(svc::evt::kSystemShutdown));
+    bus_.publish(msg::Event::make(app::sys::kSystemShutdown));
     links_.stop();
     modules_.stop();
     leds_.set(svc::LedId::Status, svc::LedPattern::Off);
@@ -148,13 +148,13 @@ int System::SysCli::on_command(int argc, char** argv, svc::CommandOutput& out) {
         return 0;
     }
     if (std::strcmp(sub, "buffers") == 0) {
-        const svc::IBufferAllocator* a = svc::Buffer::default_allocator();
+        const msg::IBufferAllocator* a = msg::Buffer::default_allocator();
         if (a == nullptr) {
             out.print("no buffer allocator configured\r\n");
             return 0;
         }
         for (std::size_t i = 0; i < a->pool_count(); ++i) {
-            const svc::PoolStats p = a->pool_stats(i);
+            const msg::PoolStats p = a->pool_stats(i);
             out.print("  pool %5lu B used=%lu/%lu  peak=%lu  failures=%lu\r\n", static_cast<unsigned long>(p.block_size),
                       static_cast<unsigned long>(p.used), static_cast<unsigned long>(p.capacity),
                       static_cast<unsigned long>(p.peak), static_cast<unsigned long>(p.failures));

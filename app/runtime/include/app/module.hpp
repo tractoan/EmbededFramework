@@ -2,8 +2,9 @@
 #include <cstdint>
 
 #include "app/system_context.hpp"
+#include "app/system_events.hpp"
 #include "core/status.hpp"
-#include "services/event.hpp"
+#include "messaging/event.hpp"
 
 namespace app {
 
@@ -20,7 +21,7 @@ public:
     virtual core::Status on_start() { return core::Status::Ok; }
     virtual void on_stop() {}
 
-    virtual void on_event(const svc::Event& /*e*/) {}
+    virtual void on_event(const msg::Event& /*e*/) {}
 
     // Tác vụ định kỳ: trả 0 nếu không cần tick.
     virtual std::uint32_t tick_period_ms() const { return 0; }

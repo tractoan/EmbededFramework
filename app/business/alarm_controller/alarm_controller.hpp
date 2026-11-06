@@ -30,7 +30,7 @@ public:
     const char* name() const override { return "alarm_ctrl"; }
     core::Status on_init(SystemContext& ctx) override;
     core::Status on_start() override;
-    void on_event(const svc::Event& e) override;
+    void on_event(const msg::Event& e) override;
 
     int on_command(int argc, char** argv, svc::CommandOutput& out) override;   // "alarm"
 
@@ -39,14 +39,14 @@ public:
 private:
     using Fsm = StateMachine<AlarmController>;
 
-    void st_normal(Fsm::Signal sig, const svc::Event* e);
-    void st_warning(Fsm::Signal sig, const svc::Event* e);
-    void st_alarm(Fsm::Signal sig, const svc::Event* e);
-    void st_fault(Fsm::Signal sig, const svc::Event* e);
+    void st_normal(Fsm::Signal sig, const msg::Event* e);
+    void st_warning(Fsm::Signal sig, const msg::Event* e);
+    void st_alarm(Fsm::Signal sig, const msg::Event* e);
+    void st_fault(Fsm::Signal sig, const msg::Event* e);
 
     void enter_level(events::AlarmLevel lvl);
     void leave_alarm(std::int32_t t);
-    bool temperature_of(const svc::Event* e, std::int32_t& out);
+    bool temperature_of(const msg::Event* e, std::int32_t& out);
     void apply_params();
 
     Config cfg_;

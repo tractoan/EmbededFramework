@@ -10,7 +10,7 @@ namespace app {
 // Nghiệp vụ: lấy mẫu nhiệt độ định kỳ, hiệu chỉnh offset, lọc trung bình trượt,
 // phát hiện lỗi cảm biến -> phát event cho các module khác.
 // Tùy chọn gom mẫu thành lô (temp.batch_n > 0): phát kTemperatureBatch với payload lớn,
-// kích thước thay đổi theo tham số, cấp phát qua svc::Buffer.
+// kích thước thay đổi theo tham số, cấp phát qua msg::Buffer.
 class TemperatureMonitor final : public IModule, public svc::ICommandHandler {
 public:
     struct Config {   // cấu hình mặc định do SẢN PHẨM chọn (compile-time)
@@ -27,7 +27,7 @@ public:
     core::Status on_init(SystemContext& ctx) override;
     core::Status on_start() override;
     void on_stop() override { batch_.reset(); }
-    void on_event(const svc::Event& e) override;
+    void on_event(const msg::Event& e) override;
     std::uint32_t tick_period_ms() const override { return period_ms_; }
     void on_tick(std::uint64_t now_ms) override;
 
@@ -53,7 +53,7 @@ private:
     bool faulted_ = false;
 
     std::size_t batch_n_          = 0;
-    svc::Buffer batch_;               // lô đang gom (chỉ module này ghi; chuyển quyền khi publish)
+    msg::Buffer batch_;               // lô đang gom (chỉ module này ghi; chuyển quyền khi publish)
     std::uint32_t batch_first_ms_ = 0;
     bool alloc_warned_            = false;
 

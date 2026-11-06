@@ -3,9 +3,9 @@
 
 #include "core/status.hpp"
 #include "osal/mutex.hpp"
-#include "services/event.hpp"
+#include "messaging/event.hpp"
 
-namespace svc {
+namespace msg {
 
 // Publish/Subscribe đồng bộ, không cấp phát động.
 // publish() gọi on_event() của listener ngay trên thread của publisher, ngoài vùng khóa.
@@ -27,4 +27,4 @@ private:
     mutable osal::Mutex mtx_;
 };
 
-}  // namespace svc
+}  // namespace msg

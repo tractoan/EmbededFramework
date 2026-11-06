@@ -11,8 +11,8 @@ namespace modbus {
 // Input register (FC04, chỉ đọc): giá trị mới nhất trích từ một Event miền.
 struct InputRegister {
     std::uint16_t address;
-    svc::EventId event;
-    bool (*extract)(const svc::Event& e, std::int32_t& value);
+    msg::EventId event;
+    bool (*extract)(const msg::Event& e, std::int32_t& value);
     bool is_signed;
 };
 

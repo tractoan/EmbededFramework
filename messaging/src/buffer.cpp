@@ -1,12 +1,12 @@
-#include "services/buffer.hpp"
+#include "messaging/buffer.hpp"
 
 #include <cstring>
 #include <new>
 
 #include "osal/critical.hpp"
-#include "services/buffer_allocators.hpp"
+#include "messaging/buffer_allocators.hpp"
 
-namespace svc {
+namespace msg {
 
 // ================================================================== Buffer
 namespace {
@@ -179,4 +179,4 @@ PoolStats ChainAllocator::pool_stats(std::size_t index) const {
     return index < n ? primary_.pool_stats(index) : fallback_.pool_stats(index - n);
 }
 
-}  // namespace svc
+}  // namespace msg

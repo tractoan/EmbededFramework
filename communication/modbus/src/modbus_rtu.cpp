@@ -41,17 +41,17 @@ core::Status ModbusRtuProtocol::attach(comm::IByteStream& io, comm::Services& se
     io_       = &io;
     services_ = &services;
     rx_len_   = 0;
-    return services.bus.subscribe(svc::evt::kAny, this);
+    return services.bus.subscribe(msg::evt::kAny, this);
 }
 
 void ModbusRtuProtocol::detach() {
-    if (services_ != nullptr) services_->bus.unsubscribe(svc::evt::kAny, this);
+    if (services_ != nullptr) services_->bus.unsubscribe(msg::evt::kAny, this);
     io_       = nullptr;
     services_ = nullptr;
     rx_len_   = 0;
 }
 
-void ModbusRtuProtocol::on_event(const svc::Event& e) {
+void ModbusRtuProtocol::on_event(const msg::Event& e) {
     for (std::size_t i = 0; i < map_.input_count; ++i) {
         std::int32_t v = 0;
         if (map_.inputs[i].event == e.id && map_.inputs[i].extract(e, v)) inputs_[i] = v;

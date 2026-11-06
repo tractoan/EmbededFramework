@@ -23,7 +23,7 @@ struct Record {
 static_assert(sizeof(Header) == 8 && sizeof(Record) == 8, "NV layout must be packed");
 }  // namespace
 
-void ParamStore::init(hal::INvStorage* storage, EventBus* bus) {
+void ParamStore::init(hal::INvStorage* storage, msg::EventBus* bus) {
     storage_ = storage;
     bus_     = bus;
 }
@@ -72,7 +72,7 @@ core::Status ParamStore::set(ParamId id, std::int32_t value) {
         if (e.value == value) return core::Status::Ok;
         e.value = value;
     }
-    if (bus_ != nullptr) bus_->publish(Event::make(evt::kParamChanged, ParamChanged{id, value}));
+    if (bus_ != nullptr) bus_->publish(msg::Event::make(evt::kParamChanged, ParamChanged{id, value}));
     return core::Status::Ok;
 }
 

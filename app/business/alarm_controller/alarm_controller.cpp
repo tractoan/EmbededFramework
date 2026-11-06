@@ -45,7 +45,7 @@ void AlarmController::apply_params() {
     if (high_ <= warn_) LOGW(kTag, "alarm.high (%ld) <= alarm.warn (%ld)", static_cast<long>(high_), static_cast<long>(warn_));
 }
 
-void AlarmController::on_event(const svc::Event& e) {
+void AlarmController::on_event(const msg::Event& e) {
     svc::ParamChanged pc{};
     if (e.id == svc::evt::kParamChanged && e.get(pc) && (pc.id & 0xFF00u) == 0x1100u) {
         apply_params();
@@ -54,7 +54,7 @@ void AlarmController::on_event(const svc::Event& e) {
     fsm_.dispatch(e);
 }
 
-bool AlarmController::temperature_of(const svc::Event* e, std::int32_t& out) {
+bool AlarmController::temperature_of(const msg::Event* e, std::int32_t& out) {
     events::TemperatureSample s{};
     if (e == nullptr || e->id != events::kTemperature || !e->get(s)) return false;
     last_temp_ = s.deci_celsius;
@@ -80,11 +80,11 @@ void AlarmController::enter_level(AlarmLevel lvl) {
     } else {
         LOGW(kTag, "%s -> %s (T=%s C)", events::to_string(prev), events::to_string(lvl), t.c_str());
     }
-    ctx_->bus.publish(svc::Event::make(events::kAlarmStateChanged, events::AlarmStateChanged{prev, lvl, last_temp_}));
+    ctx_->bus.publish(msg::Event::make(events::kAlarmStateChanged, events::AlarmStateChanged{prev, lvl, last_temp_}));
 }
 
 // ------------------------------------------------------------------ states
-void AlarmController::st_normal(Signal sig, const svc::Event* e) {
+void AlarmController::st_normal(Signal sig, const msg::Event* e) {
     if (sig == Signal::Entry) {
         enter_level(AlarmLevel::Normal);
     } else if (sig == Signal::Event) {
@@ -101,7 +101,7 @@ void AlarmController::st_normal(Signal sig, const svc::Event* e) {
     }
 }
 
-void AlarmController::st_warning(Signal sig, const svc::Event* e) {
+void AlarmController::st_warning(Signal sig, const msg::Event* e) {
     if (sig == Signal::Entry) {
         enter_level(AlarmLevel::Warning);
     } else if (sig == Signal::Event) {
@@ -122,7 +122,7 @@ void AlarmController::leave_alarm(std::int32_t t) {
     fsm_.transition(t >= warn_ ? &AlarmController::st_warning : &AlarmController::st_normal);
 }
 
-void AlarmController::st_alarm(Signal sig, const svc::Event* e) {
+void AlarmController::st_alarm(Signal sig, const msg::Event* e) {
     if (sig == Signal::Entry) {
         acked_        = false;
         latch_notice_ = false;
@@ -151,7 +151,7 @@ void AlarmController::st_alarm(Signal sig, const svc::Event* e) {
     }
 }
 
-void AlarmController::st_fault(Signal sig, const svc::Event* e) {
+void AlarmController::st_fault(Signal sig, const msg::Event* e) {
     if (sig == Signal::Entry) {
         enter_level(AlarmLevel::Fault);
     } else if (sig == Signal::Event && e->id == events::kSensorRecovered) {
@@ -163,7 +163,7 @@ void AlarmController::st_fault(Signal sig, const svc::Event* e) {
 // Chạy trên thread CLI: KHÔNG chạm vào FSM trực tiếp -> gửi yêu cầu qua event.
 int AlarmController::on_command(int argc, char** argv, svc::CommandOutput& out) {
     if (argc >= 2 && std::strcmp(argv[1], "ack") == 0) {
-        ctx_->bus.publish(svc::Event::make(events::kAlarmAckRequest));
+        ctx_->bus.publish(msg::Event::make(events::kAlarmAckRequest));
         out.print("ack requested\r\n");
         return 0;
     }

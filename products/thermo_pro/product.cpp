@@ -5,7 +5,7 @@
 #include "comm/cli_protocol.hpp"
 #include "modbus/modbus_rtu.hpp"
 #include "modbus_map.hpp"
-#include "services/buffer_allocators.hpp"
+#include "messaging/buffer_allocators.hpp"
 #include "stats_reporter.hpp"
 #include "temperature_monitor/temperature_monitor.hpp"
 
@@ -34,11 +34,11 @@ app::AlarmController::Config alarm_cfg() {
 // Bộ nhớ cho payload lớn: chỉ pool tĩnh 3 lớp kích thước (O(1), không phân mảnh, không heap).
 // Sức chứa mỗi block tính theo header 24 B trên host 64-bit (MCU 32-bit: 16 B).
 void setup_buffers() {
-    static svc::StaticBlockPool<64, 16> small;    // lô <= 20 mẫu
-    static svc::StaticBlockPool<512, 8> medium;   // lô <= 244 mẫu
-    static svc::StaticBlockPool<2048, 4> large;   // lô <= 1012 mẫu
-    static svc::PoolAllocator pools({&small, &medium, &large});
-    svc::Buffer::set_default_allocator(&pools);
+    static msg::StaticBlockPool<64, 16> small;    // lô <= 20 mẫu
+    static msg::StaticBlockPool<512, 8> medium;   // lô <= 244 mẫu
+    static msg::StaticBlockPool<2048, 4> large;   // lô <= 1012 mẫu
+    static msg::PoolAllocator pools({&small, &medium, &large});
+    msg::Buffer::set_default_allocator(&pools);
 }
 
 core::Status setup_modules(app::ModuleManager& modules) {

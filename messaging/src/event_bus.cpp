@@ -1,8 +1,8 @@
-#include "services/event_bus.hpp"
+#include "messaging/event_bus.hpp"
 
 #include "osal/time.hpp"
 
-namespace svc {
+namespace msg {
 
 core::Status EventBus::subscribe(EventId id, IEventListener* listener) {
     if (listener == nullptr) return core::Status::InvalidArg;
@@ -46,4 +46,4 @@ std::size_t EventBus::subscriber_count() const {
     return count_;
 }
 
-}  // namespace svc
+}  // namespace msg

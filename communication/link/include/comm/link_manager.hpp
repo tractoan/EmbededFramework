@@ -14,7 +14,7 @@ namespace comm {
 //     0 = off, 1 = auto (tự nhận dạng), hoặc ProtocolId của giao thức.
 // Đổi tham số (CLI "link set", Modbus, MAVLink...) -> kênh chuyển giao thức NGAY lúc chạy,
 // "param save" -> giữ lựa chọn sau khi khởi động lại.
-class LinkManager final : public svc::IEventListener, public svc::ICommandHandler, private core::NonCopyable {
+class LinkManager final : public msg::IEventListener, public svc::ICommandHandler, private core::NonCopyable {
 public:
     static constexpr svc::ParamId kParamBase    = 0x0200;   // comm.<kênh thứ i> = 0x0200 + i
     static constexpr std::uint32_t kAutoIdleMs  = 10000;    // auto: im lặng lâu -> nhận dạng lại
@@ -37,7 +37,7 @@ public:
     const char* active_protocol(std::size_t ch) const;   // "none" nếu chưa có
     ProtocolId setting(std::size_t ch) const;
 
-    void on_event(const svc::Event& e) override;
+    void on_event(const msg::Event& e) override;
     int on_command(int argc, char** argv, svc::CommandOutput& out) override;   // "link"
 
 private:

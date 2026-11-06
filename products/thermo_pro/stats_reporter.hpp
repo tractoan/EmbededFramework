@@ -28,7 +28,7 @@ public:
         return core::Status::Ok;
     }
 
-    void on_event(const svc::Event& e) override {
+    void on_event(const msg::Event& e) override {
         app::events::TemperatureBatch batch{};
         svc::ParamChanged pc{};
         if (e.id == app::events::kTemperatureBatch && e.get(batch)) {

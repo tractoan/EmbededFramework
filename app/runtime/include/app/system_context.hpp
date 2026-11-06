@@ -1,7 +1,7 @@
 #pragma once
 #include "device/temperature_sensor.hpp"
 #include "services/command_service.hpp"
-#include "services/event_bus.hpp"
+#include "messaging/event_bus.hpp"
 #include "services/led_service.hpp"
 #include "services/param_store.hpp"
 
@@ -15,7 +15,7 @@ struct Devices {
 // Dependency Injection: mọi thứ module nghiệp vụ được phép dùng.
 // Module KHÔNG truy cập trực tiếp HAL / OSAL native / biến toàn cục.
 struct SystemContext {
-    svc::EventBus& bus;
+    msg::EventBus& bus;
     svc::ParamStore& params;
     svc::CommandService& cli;
     svc::LedService& leds;

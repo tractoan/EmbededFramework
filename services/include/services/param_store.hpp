@@ -3,8 +3,8 @@
 #include <cstdint>
 
 #include "hal/storage.hpp"
+#include "messaging/event_bus.hpp"
 #include "osal/mutex.hpp"
-#include "services/event_bus.hpp"
 
 namespace svc {
 
@@ -20,6 +20,11 @@ struct ParamDef {
     const char* unit;
 };
 
+// Event do services phát (dải msg::evt::kServiceBase).
+namespace evt {
+inline constexpr msg::EventId kParamChanged = msg::evt::kServiceBase + 1;   // payload: svc::ParamChanged
+}  // namespace evt
+
 struct ParamChanged {   // payload của evt::kParamChanged
     ParamId id;
     std::int32_t value;
@@ -29,7 +34,7 @@ struct ParamChanged {   // payload của evt::kParamChanged
 // phát evt::kParamChanged khi thay đổi -> nghiệp vụ tùy biến lúc chạy không cần build lại.
 class ParamStore : core::NonCopyable {
 public:
-    void init(hal::INvStorage* storage, EventBus* bus);
+    void init(hal::INvStorage* storage, msg::EventBus* bus);
 
     core::Status register_params(const ParamDef* defs, std::size_t count);
 
@@ -55,7 +60,7 @@ private:
     std::array<Entry, core::cfg::kMaxParams> entries_{};
     std::size_t count_          = 0;
     hal::INvStorage* storage_   = nullptr;
-    EventBus* bus_              = nullptr;
+    msg::EventBus* bus_         = nullptr;
     mutable osal::Mutex mtx_;
 };
 

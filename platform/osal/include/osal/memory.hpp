@@ -8,7 +8,7 @@
 //       - mọi lần gọi heap (operator new/malloc, nếu bộ chặn heap được link) bị coi là VI PHẠM:
 //         tăng bộ đếm và gọi HeapViolationHandler do target cài (mặc định: abort).
 //
-// Payload lớn dùng svc::Buffer + PoolAllocator: bộ nhớ là pool TĨNH, cấp/trả O(1) –
+// Payload lớn dùng msg::Buffer + PoolAllocator: bộ nhớ là pool TĨNH, cấp/trả O(1) –
 // không phải heap, được phép lúc chạy.
 #include <cstddef>
 #include <cstdint>

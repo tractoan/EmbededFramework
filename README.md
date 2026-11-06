@@ -1,6 +1,6 @@
 # Embedded Platform – Kiến trúc phần mềm nhúng C++ đa nền tảng
 
-Bộ khung firmware C++17 phân lớp rõ ràng: **Platform (Core / OSAL / HAL / Device) → Services → Communication → Application (Runtime & Business)**.
+Bộ khung firmware C++17 phân lớp rõ ràng: **Platform (Core / OSAL / HAL / Device) → Messaging → Services → Communication → Application (Runtime & Business)**.
 Mục tiêu:
 
 - **Chuyển nền tảng** (MCU, board, RTOS, Linux) mà **không sửa** code nghiệp vụ.
@@ -26,9 +26,11 @@ Mục tiêu:
 │  link/   IByteStream · IProtocol · LinkManager (chọn/đổi giao thức)    │
 │  cli/    CliProtocol     modbus/ ModbusRtuProtocol + Map   (mavlink/…) │
 ├────────────────────────────────────────────────────────────────────────┤
-│ SERVICES (services/)                                                   │
-│  EventBus · ParamStore(NV+CRC) · CommandService(bảng lệnh) · Logger    │
-│  LedService · Buffer + allocator (Pool / Chain, tĩnh) cho payload lớn  │
+│ SERVICES (services/)  dịch vụ hệ thống: có trạng thái, có chính sách   │
+│  ParamStore(NV+CRC) · CommandService(bảng lệnh) · Logger · LedService  │
+├────────────────────────────────────────────────────────────────────────┤
+│ MESSAGING (messaging/)  lõi giao tiếp, không phụ thuộc nền tảng        │
+│  Event · EventBus · Buffer + pool tĩnh (BlockPool/Pool/ChainAllocator) │
 ╞═════════════════════════ PLATFORM (platform/) ═════════════════════════╡
 │ DEVICE (device/)  thiết bị NGOÀI chip: Tmp102 : ITemperatureSensor     │
 ├──────────────────────────────────┬─────────────────────────────────────┤
@@ -51,7 +53,8 @@ Mục tiêu:
 | **Platform › OSAL** | Thread, mutex, semaphore, queue, thời gian, vùng găng | Truy cập phần cứng | **Link-time** (chọn port khi build) → zero-overhead |
 | **Platform › HAL** | Ngoại vi **trên chip**: GPIO, UART, I2C, NV storage; `IBoard` ánh xạ ID logic → phần cứng | Gọi OSAL, chứa logic nghiệp vụ, biết tới sản phẩm | **Runtime** (interface ảo) → mock được, nhiều instance |
 | **Platform › Device** | Driver thiết bị **ngoài chip** trên board (cảm biến, EEPROM, màn hình…) + interface theo loại thiết bị | Dùng services (EventBus, ParamStore, Logger), tự tạo thread, gọi API vendor | **Runtime** (`ITemperatureSensor`…) |
-| **Services** | Dịch vụ hệ thống dùng chung: event bus, tham số, bảng lệnh, log, LED | Chứa quy tắc nghiệp vụ của sản phẩm; gọi API vendor trực tiếp | Interface (`ILogSink`, `ICommandHandler`) |
+| **Messaging** | Cơ chế giao tiếp của framework: `Event`, `EventBus` (pub/sub, quy ước chia dải ID), payload lớn `Buffer` + pool tĩnh | Định nghĩa event cụ thể của lớp khác; phụ thuộc services trở lên; có port theo nền tảng | Interface (`IEventListener`, `IBufferAllocator`) |
+| **Services** | Dịch vụ hệ thống dùng chung, có trạng thái và chính sách: tham số, bảng lệnh, log, LED | Chứa quy tắc nghiệp vụ của sản phẩm; gọi API vendor trực tiếp | Interface (`ILogSink`, `ICommandHandler`) |
 | **Communication** | Truyền thông: kênh, giao thức (CLI, Modbus…), chọn/đổi giao thức lúc chạy | Biết tới module nghiệp vụ cụ thể (chỉ dùng Event/Param qua bảng ánh xạ) | **Runtime** (`IByteStream`, `IProtocol`) |
 | **Application – Runtime** | Vòng đời module, định tuyến event, lập lịch tick, state machine, boot | Chứa nghiệp vụ cụ thể | – |
 | **Application – Business** | Quy tắc nghiệp vụ (đo, cảnh báo, điều khiển...) | Include `hal/*`, `osal_port_types.hpp`, header vendor; tự tạo thread | Plug-in qua `IModule` |
@@ -65,11 +68,15 @@ utils ◄── core ◄─┤ osal ◄──┬── device                 �
                  │ hal  ◄──┴── target                 │
                  └────────────────┬───────────────────┘
                                   ▼
-            services ◄── communication(link ◄ cli, modbus) ◄── app_runtime ◄── business ◄── product
-                                                                                                │
-                                         main.cpp (thư mục gốc) ◄── nối product + target ───────┘
+            messaging ◄── services ◄── communication(link ◄ cli, modbus) ◄── app_runtime ◄── business ◄── product
+                                                                                                             │
+                                                      main.cpp (thư mục gốc) ◄── nối product + target ───────┘
 ```
 (mũi tên `A ◄── B`: B phụ thuộc A)
+
+`messaging` **không** nằm trong `platform/`: nó không có port theo nền tảng và driver/HAL không được phát event
+(driver báo lỗi bằng `core::Status`; ISR đưa dữ liệu lên qua `utils::RingBuffer` / `Semaphore::give_from_isr`,
+một thread ở tầng trên mới publish). CMake chặn `platform` include `messaging`.
 
 `main.cpp` ở thư mục gốc là entry point **duy nhất**, giống nhau cho mọi target và sản phẩm:
 
@@ -112,9 +119,10 @@ EmbededFramework/
 │       ├── stm32f4_ucos2/      # ... OSInit/OSStart, SysTick + PendSV cho uC/OS-II
 │       ├── stm32f4_ucos3/      # ... CPU_Init/OSInit/OSStart, SysTick + PendSV cho uC/OS-III
 │       └── common/stm32f4/     # clock_config.c dùng chung
+├── messaging/
+│   └── include/messaging/      # event, event_bus, buffer, buffer_allocators     (ep_messaging)
 ├── services/
-│   └── include/services/       # event_bus, param_store, command_service, logger, led_service,
-│                               # buffer, buffer_allocators
+│   └── include/services/       # param_store, param_cli, command_service, logger, led_service
 ├── communication/
 │   ├── link/                   # byte_stream, protocol, link_manager      (ep_comm)
 │   ├── cli/                    # cli_protocol                             (ep_proto_cli)
@@ -156,9 +164,9 @@ EmbededFramework/
 - Handler lệnh / giao thức chạy trên thread của kênh ⇒ **không sửa trạng thái module trực tiếp**, mà publish event yêu cầu
   (ví dụ `alarm ack` hoặc coil Modbus 0 → `kAlarmAckRequest`).
 - Event được copy theo giá trị qua bus/queue. Payload nhỏ nằm inline (`trivially_copyable`, ≤ 16 B, kiểm tra bằng
-  `static_assert`); payload lớn đi kèm `svc::Buffer` (xem dưới).
+  `static_assert`); payload lớn đi kèm `msg::Buffer` (xem dưới).
 
-### Payload lớn & kích thước thay đổi: `svc::Buffer`
+### Payload lớn & kích thước thay đổi: `msg::Buffer`
 
 ```
 Event { id, size, timestamp, payload[16] (header nhỏ inline), buffer ──► [refs|cap|len|owner][ dữ liệu ... ] }
@@ -166,11 +174,11 @@ Event { id, size, timestamp, payload[16] (header nhỏ inline), buffer ──►
 ```
 
 ```cpp
-svc::Buffer data = svc::Buffer::allocate(n * sizeof(int16_t));           // kích thước bất kỳ, lúc chạy
+msg::Buffer data = msg::Buffer::allocate(n * sizeof(int16_t));           // kích thước bất kỳ, lúc chạy
 std::memcpy(data.data(), samples, data.size());                           // GHI trước khi publish
-bus.publish(svc::Event::make(kTemperatureBatch, TemperatureBatch{n, ...}, std::move(data)));
+bus.publish(msg::Event::make(kTemperatureBatch, TemperatureBatch{n, ...}, std::move(data)));
 
-void on_event(const svc::Event& e) {                                      // mọi listener đọc CÙNG vùng nhớ
+void on_event(const msg::Event& e) {                                      // mọi listener đọc CÙNG vùng nhớ
     TemperatureBatch hdr{};
     if (e.id == kTemperatureBatch && e.get(hdr)) process(e.buffer.data(), e.buffer.size());
 }
@@ -216,7 +224,7 @@ mức dùng vùng stack, cần sửa `TaskPlan` / `EP_CFG_STACK_POOL_BYTES`.
 | Object của framework, sản phẩm | `static` / thành viên của `System` | Lúc khởi động |
 | Stack của thread | Do sản phẩm cấp (`stack_mem`) hoặc lấy từ **vùng stack tĩnh** `EP_CFG_STACK_POOL_BYTES` (`osal::allocate_stack`) | Chỉ lúc khởi động |
 | Kernel object (TCB, semaphore, mutex) | Nằm ngay trong wrapper OSAL (`xTaskCreateStatic`, `OS_TCB`, …) | Cùng lúc với object chứa nó |
-| Payload lớn | `svc::Buffer` + pool tĩnh | Lúc chạy, O(1), không heap |
+| Payload lớn | `msg::Buffer` + pool tĩnh | Lúc chạy, O(1), không heap |
 | Heap (`new`, `malloc`) | **Không dùng.** FreeRTOS: `configSUPPORT_DYNAMIC_ALLOCATION = 0`, không build `heap_x.c` | – |
 
 **Kiểm chứng lúc chạy:** firmware link `ep_heap_guard` (thay `operator new/delete`; trên STM32 bọc thêm
@@ -259,7 +267,7 @@ vùng RAM riêng). Mỗi port ánh xạ tuyến tính 16 mức sang priority nat
 | **Cấu hình module (compile-time)** | `Module::Config` truyền vào constructor | ngưỡng, chu kỳ mẫu, latch theo từng sản phẩm |
 | **Cấu hình hệ thống (compile-time)** | `product_config.hpp` override `EP_CFG_*` | độ sâu queue, số module, mức log tối thiểu |
 | **Tham số runtime** | `ParamStore` + CLI `param set/save`, sự kiện `kParamChanged` | đổi `alarm.high` khi đang chạy, lưu Flash |
-| **Bộ nhớ payload lớn** | Pool tĩnh của `svc::Buffer` chọn trong `product::setup()` | pool nhỏ cho MCU nhỏ, nhiều lớp pool cho bản cao cấp |
+| **Bộ nhớ payload lớn** | Pool tĩnh của `msg::Buffer` chọn trong `product::setup()` | pool nhỏ cho MCU nhỏ, nhiều lớp pool cho bản cao cấp |
 | **Priority & stack của task** | `TaskPlan` (`s.tasks`) + tham số của `add_channel()`; `EP_CFG_STACK_POOL_BYTES` | nghiệp vụ `High`, console `6`, LED `Low` |
 | **Mở rộng hành vi** | Module mới / state mới trong `StateMachine` | thêm trạng thái `Maintenance` |
 | **Module riêng của sản phẩm** | Đặt trong `products/<p>/` | `products/thermo_pro/stats_reporter.hpp` |
@@ -356,7 +364,7 @@ public:
         ctx_ = &ctx;
         return ctx.params.register_params(defs_, 1);          // tham số của module
     }
-    void on_event(const svc::Event& e) override {
+    void on_event(const msg::Event& e) override {
         app::events::TemperatureSample s{};
         if (e.id == app::events::kTemperature && e.get(s)) { /* quy tắc nghiệp vụ */ }
     }
@@ -449,7 +457,7 @@ còn driver thiết bị giống nhau trên mọi board và có thể dùng lạ
    MAVLink sinh từ XML) đặt ở `third_party/` và **chỉ** target này được include.
 2. Hiện thực `comm::IProtocol`: `id()` (giá trị ổn định, vd. `proto::kMavlink` hoặc `proto::kUserBase + n`),
    `attach/detach`, `on_rx` (parse), `poll` (heartbeat/timeout), `probe` (nhận dạng chặt chẽ, có CRC).
-   Cần đẩy dữ liệu chủ động thì kế thừa thêm `svc::IEventListener` và ghi qua `io.write()` (đã thread-safe).
+   Cần đẩy dữ liệu chủ động thì kế thừa thêm `msg::IEventListener` và ghi qua `io.write()` (đã thread-safe).
 3. Đặt bảng ánh xạ Event/Param ↔ message ở sản phẩm (như `modbus_map.cpp`), không viết vào nghiệp vụ.
 4. Trong `product::setup()`: tạo instance (mỗi kênh một instance) và thêm vào danh sách của kênh.
 5. Test bằng `mock::ScriptedStream` + khung mẫu (golden frame), như `tests/test_modbus.cpp`, `tests/test_link_manager.cpp`.
@@ -529,7 +537,7 @@ port CPU) vẫn cần kiểm thử trên board.
 - C++17, `-fno-exceptions -fno-rtti`; lỗi trả về `core::Status`.
 - Không cấp phát động sau khi khởi động (bộ chặn heap kiểm chứng lúc chạy): dùng `std::array`, `static` object,
   stack tĩnh cho thread, pool tĩnh cho payload. Không tạo thread mới lúc chạy trừ khi tự mang stack tĩnh.
-  Bộ nhớ động cho payload chỉ đi qua `svc::Buffer` + allocator mà sản phẩm chọn (mặc định nên là pool tĩnh).
+  Bộ nhớ động cho payload chỉ đi qua `msg::Buffer` + allocator mà sản phẩm chọn (mặc định nên là pool tĩnh).
 - Không dùng `std::string`, `std::vector`, `iostream` trong firmware (chỉ được dùng trong test / port host).
 - Khởi tạo hai pha (`init()` sau constructor) cho object phụ thuộc phần cứng.
 - API gọi được từ ISR chỉ có hậu tố `_from_isr`. Logger không được gọi trong ISR.
@@ -545,7 +553,7 @@ port CPU) vẫn cần kiểm thử trên board.
 | Adapter / Bridge | HAL ports, OSAL ports |
 | Abstract Factory | `hal::IBoard` |
 | Dependency Injection / Composition Root | `SystemContext`, `app::System` |
-| Publish–Subscribe | `svc::EventBus` |
+| Publish–Subscribe | `msg::EventBus` |
 | Active Object | `app::ModuleManager` |
 | State Machine (state = method) | `app::StateMachine`, `AlarmController` |
 | Plug-in / Strategy | `IModule`, `ITemperatureSensor`, `ILogSink`, `ICommandHandler` |

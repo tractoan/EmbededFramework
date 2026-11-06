@@ -67,7 +67,7 @@ void LinkManager::stop() {
     for (std::size_t i = 0; i < count_; ++i) channels_[i].thread.join();
 }
 
-void LinkManager::on_event(const svc::Event& e) {
+void LinkManager::on_event(const msg::Event& e) {
     svc::ParamChanged pc{};
     if (e.id != svc::evt::kParamChanged || !e.get(pc)) return;
     if (pc.id >= kParamBase && pc.id < kParamBase + count_) {

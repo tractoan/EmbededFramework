@@ -8,7 +8,7 @@ namespace {
 using app::events::AlarmLevel;
 
 struct Fixture {
-    svc::EventBus bus;
+    msg::EventBus bus;
     svc::ParamStore params;
     svc::CommandService cli;
     svc::LedService leds;
@@ -22,8 +22,8 @@ struct Fixture {
         leds.bind(svc::LedId::Alarm, &led);
         bus.subscribe(app::events::kAlarmStateChanged, &rec);
     }
-    static svc::Event temp(std::int32_t deci) {
-        return svc::Event::make(app::events::kTemperature, app::events::TemperatureSample{deci});
+    static msg::Event temp(std::int32_t deci) {
+        return msg::Event::make(app::events::kTemperature, app::events::TemperatureSample{deci});
     }
 };
 }  // namespace
@@ -47,7 +47,7 @@ TEST(alarm_thresholds_hysteresis_and_latch) {
     CHECK(ac.level() == AlarmLevel::Alarm);
     ac.on_event(Fixture::temp(650));   // hết điều kiện nhưng đang latch
     CHECK(ac.level() == AlarmLevel::Alarm);
-    ac.on_event(svc::Event::make(app::events::kAlarmAckRequest));
+    ac.on_event(msg::Event::make(app::events::kAlarmAckRequest));
     CHECK(ac.level() == AlarmLevel::Warning);
     ac.on_event(Fixture::temp(570));
     CHECK(ac.level() == AlarmLevel::Normal);
@@ -63,16 +63,16 @@ TEST(alarm_runtime_reconfiguration_and_fault) {
 
     // Tắt latch lúc chạy qua ParamStore (giống lệnh CLI "param set alarm.latch 0")
     CHECK(core::is_ok(f.params.set(app::params::kAlarmLatch, 0)));
-    ac.on_event(svc::Event::make(svc::evt::kParamChanged, svc::ParamChanged{app::params::kAlarmLatch, 0}));
+    ac.on_event(msg::Event::make(svc::evt::kParamChanged, svc::ParamChanged{app::params::kAlarmLatch, 0}));
     ac.on_event(Fixture::temp(800));
     CHECK(ac.level() == AlarmLevel::Alarm);
     ac.on_event(Fixture::temp(500));   // không latch -> tự về Normal
     CHECK(ac.level() == AlarmLevel::Normal);
 
-    ac.on_event(svc::Event::make(app::events::kSensorFault));
+    ac.on_event(msg::Event::make(app::events::kSensorFault));
     CHECK(ac.level() == AlarmLevel::Fault);
     ac.on_event(Fixture::temp(900));   // bỏ qua dữ liệu khi đang Fault
     CHECK(ac.level() == AlarmLevel::Fault);
-    ac.on_event(svc::Event::make(app::events::kSensorRecovered));
+    ac.on_event(msg::Event::make(app::events::kSensorRecovered));
     CHECK(ac.level() == AlarmLevel::Normal);
 }
