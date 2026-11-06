@@ -5,9 +5,9 @@ add_library(ep_app_framework STATIC
 target_include_directories(ep_app_framework PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/framework/include)
 target_link_libraries(ep_app_framework PUBLIC ep_services ep_comm)
 
-# Business modules: thư viện module nghiệp vụ tái sử dụng giữa các sản phẩm.
-add_library(ep_modules STATIC
-  modules/temperature_monitor/temperature_monitor.cpp
-  modules/alarm_controller/alarm_controller.cpp)
-target_include_directories(ep_modules PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/modules)
-target_link_libraries(ep_modules PUBLIC ep_app_framework)
+# Business: thư viện module nghiệp vụ tái sử dụng giữa các sản phẩm.
+add_library(ep_business STATIC
+  business/temperature_monitor/temperature_monitor.cpp
+  business/alarm_controller/alarm_controller.cpp)
+target_include_directories(ep_business PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/business)
+target_link_libraries(ep_business PUBLIC ep_app_framework)

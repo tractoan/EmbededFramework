@@ -17,7 +17,7 @@ Mục tiêu:
 │ PRODUCT (products/<name>)   chọn module + cấu hình -> 1 firmware/sp    │
 ├────────────────────────────────────────────────────────────────────────┤
 │ APPLICATION & BUSINESS (app/)                                          │
-│  modules/   TemperatureMonitor · AlarmController · <module của bạn>    │
+│  business/  TemperatureMonitor · AlarmController · <module của bạn>    │
 │  framework/ IModule · ModuleManager(Active Object) · StateMachine      │
 │             System (Composition Root) · SystemContext (DI)             │
 ├────────────────────────────────────────────────────────────────────────┤
@@ -57,7 +57,7 @@ Mục tiêu:
 
 ```
 core ◄── utils ◄── osal ◄──┐
-              ◄── hal  ◄──┴── services ◄── middleware(comm ◄ modbus) ◄── app_framework ◄── modules ◄── product ◄── firmware(main)
+              ◄── hal  ◄──┴── services ◄── middleware(comm ◄ modbus) ◄── app_framework ◄── business ◄── product ◄── firmware(main)
 ```
 
 Mỗi lớp chỉ `target_link_libraries` tới lớp ngay dưới → include sai lớp sẽ **lỗi biên dịch**.
@@ -88,7 +88,7 @@ EmbededFramework/
 │   └── modbus/                 # modbus_map (bảng ánh xạ), modbus_rtu (slave)
 ├── app/
 │   ├── framework/include/app/  # module, module_manager, state_machine, system, product
-│   └── modules/                # module nghiệp vụ tái sử dụng + app_events.hpp, app_params.hpp
+│   └── business/               # module nghiệp vụ tái sử dụng + app_events.hpp, app_params.hpp
 ├── products/
 │   ├── thermo_pro/             # 3 module, latch, StatsReporter, CLI + Modbus (modbus_map.cpp)
 │   └── thermo_lite/            # 2 module, chỉ CLI, cấu hình nhỏ cho MCU ít RAM
@@ -252,8 +252,8 @@ private:
 };
 ```
 
-1. Cấp dải ID trong `app/modules/app_params.hpp` (param) và `app_events.hpp` (event).
-2. Thêm file `.cpp` vào target `ep_modules` (hoặc giữ trong `products/<p>/` nếu chỉ một sản phẩm dùng).
+1. Cấp dải ID trong `app/business/app_params.hpp` (param) và `app_events.hpp` (event).
+2. Thêm file `.cpp` vào target `ep_business` (hoặc giữ trong `products/<p>/` nếu chỉ một sản phẩm dùng).
 3. `s.modules.add(&pump)` trong `product::setup()`.
 4. Viết unit test như `tests/test_alarm_controller.cpp` – đưa event vào, kiểm tra kết quả, không cần phần cứng.
 
@@ -261,7 +261,7 @@ private:
 
 ```
 products/my_product/
-├── CMakeLists.txt              # add_library(ep_product ...) + link ep_modules (+ ep_proto_* cần dùng)
+├── CMakeLists.txt              # add_library(ep_product ...) + link ep_business (+ ep_proto_* cần dùng)
 ├── config/product_config.hpp   # override EP_CFG_* (tùy chọn)
 └── product.cpp                 # product::name(), product::setup(): module + kênh/giao thức
 ```
