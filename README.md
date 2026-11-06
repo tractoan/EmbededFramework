@@ -1,6 +1,6 @@
 # Embedded Platform – Kiến trúc phần mềm nhúng C++ đa nền tảng
 
-Bộ khung firmware C++17 phân lớp rõ ràng: **Platform (Core / OSAL / HAL / Device) → Services → Communication → Application (Framework & Business)**.
+Bộ khung firmware C++17 phân lớp rõ ràng: **Platform (Core / OSAL / HAL / Device) → Services → Communication → Application (Runtime & Business)**.
 Mục tiêu:
 
 - **Chuyển nền tảng** (MCU, board, RTOS, Linux) mà **không sửa** code nghiệp vụ.
@@ -18,7 +18,7 @@ Mục tiêu:
 ├────────────────────────────────────────────────────────────────────────┤
 │ APPLICATION (app/)                                                     │
 │  business/  TemperatureMonitor · AlarmController · <module của bạn>    │
-│  framework/ IModule · ModuleManager(Active Object) · StateMachine      │
+│  runtime/   IModule · ModuleManager(Active Object) · StateMachine      │
 │             System (Composition Root) · SystemContext (DI)             │
 ├────────────────────────────────────────────────────────────────────────┤
 │ COMMUNICATION (communication/)  ngăn xếp truyền thông                  │
@@ -52,7 +52,7 @@ Mục tiêu:
 | **Platform › Device** | Driver thiết bị **ngoài chip** trên board (cảm biến, EEPROM, màn hình…) + interface theo loại thiết bị | Dùng services (EventBus, ParamStore, Logger), tự tạo thread, gọi API vendor | **Runtime** (`ITemperatureSensor`…) |
 | **Services** | Dịch vụ hệ thống dùng chung: event bus, tham số, bảng lệnh, log, LED | Chứa quy tắc nghiệp vụ của sản phẩm; gọi API vendor trực tiếp | Interface (`ILogSink`, `ICommandHandler`) |
 | **Communication** | Truyền thông: kênh, giao thức (CLI, Modbus…), chọn/đổi giao thức lúc chạy | Biết tới module nghiệp vụ cụ thể (chỉ dùng Event/Param qua bảng ánh xạ) | **Runtime** (`IByteStream`, `IProtocol`) |
-| **Application – Framework** | Vòng đời module, định tuyến event, lập lịch tick, state machine, boot | Chứa nghiệp vụ cụ thể | – |
+| **Application – Runtime** | Vòng đời module, định tuyến event, lập lịch tick, state machine, boot | Chứa nghiệp vụ cụ thể | – |
 | **Application – Business** | Quy tắc nghiệp vụ (đo, cảnh báo, điều khiển...) | Include `hal/*`, `osal_port_types.hpp`, header vendor; tự tạo thread | Plug-in qua `IModule` |
 | **Product** | Lắp ráp module + kênh/giao thức + cấu hình mặc định cho từng sản phẩm | – | Chọn thư mục khi build |
 
@@ -64,7 +64,7 @@ utils ◄── core ◄─┤ osal ◄──┬── device                 �
                  │ hal  ◄──┴── target                 │
                  └────────────────┬───────────────────┘
                                   ▼
-            services ◄── communication(link ◄ cli, modbus) ◄── app_framework ◄── business ◄── product
+            services ◄── communication(link ◄ cli, modbus) ◄── app_runtime ◄── business ◄── product
                                                                                                 │
                                          main.cpp (thư mục gốc) ◄── nối product + target ───────┘
 ```
@@ -114,7 +114,7 @@ EmbededFramework/
 │   ├── cli/                    # cli_protocol                             (ep_proto_cli)
 │   └── modbus/                 # modbus_map (bảng ánh xạ), modbus_rtu     (ep_proto_modbus)
 ├── app/
-│   ├── framework/include/app/  # module, module_manager, state_machine, system, product
+│   ├── runtime/include/app/    # module, module_manager, state_machine, system, product
 │   └── business/               # module nghiệp vụ tái sử dụng + app_events.hpp, app_params.hpp
 ├── products/
 │   ├── thermo_pro/             # 3 module, latch, StatsReporter, CLI + Modbus (modbus_map.cpp)
