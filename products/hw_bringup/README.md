@@ -1,5 +1,7 @@
 # hw_bringup – firmware bring-up phần cứng giao tiếp MAVLink
 
+Yêu cầu (cập nhật được, dùng làm đầu vào cho prompt): [`REQUIREMENTS.md`](REQUIREMENTS.md).
+
 Firmware chạy trên **CPU nhúng (Linux)** để kiểm tra bo mạch, báo kết quả lên **phần mềm giao diện qua MAVLink v2**.
 
 | Phần cứng | Kiểm tra |
