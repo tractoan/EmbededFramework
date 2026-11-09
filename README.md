@@ -20,7 +20,7 @@ Mục tiêu:
 ├────────────────────────────────────────────────────────────────────────┤
 │ APPLICATION (app/)                                                     │
 │  business/  TemperatureMonitor · AlarmController · <module của bạn>    │
-│             SerialBringup · IoBringup · ImuBringup (bring-up phần cứng)│
+│             Serial/Gnss/Io/ImuBringup (bring-up phần cứng)             │
 │  runtime/   IModule · ModuleManager(Active Object) · StateMachine      │
 │             System (Composition Root) · SystemContext (DI)             │
 ├────────────────────────────────────────────────────────────────────────┤
@@ -32,7 +32,7 @@ Mục tiêu:
 ├────────────────────────────────────────────────────────────────────────┤
 │ SERVICES (services/)  dịch vụ hệ thống: có trạng thái, có chính sách   │
 │  ParamStore(NV+CRC) · CommandService(bảng lệnh) · Logger · LedService  │
-│  SerialPortBank (loopback/stream) · HdlcImu (thread đọc khung SDLC)    │
+│  SerialPortBank · GnssReceiver (NMEA) · HdlcImu (khung SDLC/HDLC)      │
 ├────────────────────────────────────────────────────────────────────────┤
 │ MESSAGING (messaging/)  lõi giao tiếp, không phụ thuộc nền tảng        │
 │  Event · EventBus · Buffer + pool tĩnh (BlockPool/Pool/ChainAllocator) │
@@ -150,7 +150,7 @@ EmbededFramework/
 │   └── include/messaging/      # event, event_bus, buffer, buffer_allocators     (ep_messaging)
 ├── services/
 │   └── include/services/       # param_store, param_cli, command_service, logger, led_service,
-│                               # serial_port_bank, hdlc_imu
+│                               # serial_port_bank, gnss_receiver, hdlc_imu
 ├── communication/
 │   ├── link/                   # byte_stream, protocol, link_manager      (ep_comm)
 │   ├── net/                    # tcp_server/tcp_client/udp stream         (ep_comm_net, khi có mạng)

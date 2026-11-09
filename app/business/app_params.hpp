@@ -17,7 +17,7 @@ inline constexpr svc::ParamId kAlarmHysteresisDeci = 0x1103;
 inline constexpr svc::ParamId kAlarmLatch          = 0x1104;
 
 // Bring-up phần cứng (tên <= 16 ký tự để đọc/ghi được qua MAVLink PARAM_*)
-//   SerialBringup: 0x1200..0x121F
+//   SerialBringup: 0x1200..0x120F, GnssBringup: 0x1210..0x121F
 inline constexpr svc::ParamId kSerPeriodMs   = 0x1201;   // ser.period_ms
 inline constexpr svc::ParamId kSerTimeoutMs  = 0x1202;   // ser.timeout_ms
 inline constexpr svc::ParamId kSerReportMs   = 0x1203;   // ser.report_ms

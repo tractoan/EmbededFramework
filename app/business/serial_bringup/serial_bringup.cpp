@@ -1,16 +1,12 @@
 #include "serial_bringup/serial_bringup.hpp"
 
-#include "bringup_notify.hpp"
-
-#include <cstdlib>
 #include <cstring>
 
+#include "bringup_notify.hpp"
 #include "osal/time.hpp"
-#include "services/logger.hpp"
 
 namespace app {
 
-using bringup::GnssState;
 using bringup::Severity;
 using bringup::SerialRole;
 
@@ -23,7 +19,6 @@ core::Status SerialBringup::on_init(SystemContext& ctx) {
     if (cfg_.ports == nullptr || cfg_.ports->count() > bringup::kMaxSerial) return core::Status::InvalidArg;
     core::Status st = ctx.params.register_params(defs_, sizeof(defs_) / sizeof(defs_[0]));
     if (core::is_ok(st)) st = ctx.cli.register_command({"serial", "[reset] - serial loopback status", this});
-    if (core::is_ok(st)) st = ctx.cli.register_command({"gnss", "[send <text> | baud <bps>] - GNSS receiver", this});
     return st;
 }
 
@@ -32,102 +27,31 @@ void SerialBringup::apply_params() {
     cfg_.ports->set_test_timing(static_cast<std::uint32_t>(get(params::kSerPeriodMs, 200)),
                                 static_cast<std::uint32_t>(get(params::kSerTimeoutMs, 50)));
     report_ms_ = static_cast<std::uint32_t>(get(params::kSerReportMs, 500));
-    detect_ms_ = static_cast<std::uint32_t>(get(params::kGnssDetectMs, 5000));
-    forward_   = get(params::kGnssForward, 1) != 0;
 }
 
 core::Status SerialBringup::on_start() {
     apply_params();
-    start_ms_ = osal::now_ms();
-    if (cfg_.gnss_port >= 0) {
-        const auto g = static_cast<std::size_t>(cfg_.gnss_port);
-        cfg_.ports->set_baudrate(g, static_cast<std::uint32_t>(ctx_->params.get_or(params::kGnssBaud, 115200)));
-        cfg_.ports->set_mode(g, svc::SerialMode::Stream);
-        gnss_state_ = GnssState::Detecting;
-    } else {
-        gnss_state_ = GnssState::Absent;
-    }
-    const core::Status st = cfg_.ports->start();
-    if (!core::is_ok(st)) return st;
-    if (cfg_.gnss_port >= 0) {
-        bringup::notify(*ctx_, kTag, Severity::Info, "GNSS: waiting data on port %d (%lu ms)", cfg_.gnss_port,
-               static_cast<unsigned long>(detect_ms_));
-    }
-    return core::Status::Ok;
+    return cfg_.ports->start();
 }
 
 void SerialBringup::on_stop() { cfg_.ports->stop(); }
 
-SerialRole SerialBringup::role(std::size_t port) const {
-    if (static_cast<int>(port) == cfg_.gcs_port) return SerialRole::Gcs;
-    if (static_cast<int>(port) == cfg_.gnss_port && gnss_state_ != GnssState::Absent) return SerialRole::Gnss;
-    const svc::SerialMode m = cfg_.ports->stats(port).mode;
-    return m == svc::SerialMode::Loopback ? SerialRole::Loopback : SerialRole::Disabled;
-}
-
-void SerialBringup::update_gnss(std::uint64_t now_ms) {
-    if (cfg_.gnss_port < 0) return;
-    const auto g = static_cast<std::size_t>(cfg_.gnss_port);
-
-    if (gnss_state_ == GnssState::Detecting) {
-        const svc::SerialPortStats s = cfg_.ports->stats(g);
-        if (s.rx_bytes > 0) {
-            gnss_state_ = GnssState::Connected;
-            bringup::notify(*ctx_, kTag, Severity::Notice, "GNSS: receiver detected on port %d", cfg_.gnss_port);
-        } else if (now_ms >= start_ms_ + detect_ms_) {
-            gnss_state_ = GnssState::Absent;
-            cfg_.ports->set_mode(g, svc::SerialMode::Loopback);
-            bringup::notify(*ctx_, kTag, Severity::Warning, "GNSS: no data in %lus, port %d -> loopback",
-                   static_cast<unsigned long>(detect_ms_ / 1000), cfg_.gnss_port);
-            return;
-        }
-    }
-    if (gnss_state_ != GnssState::Connected) return;
-
-    // Chuyển tiếp dữ liệu máy thu: mỗi event tối đa kGnssChunkMax byte trong buffer (pool tĩnh),
-    // tối đa 4 event/tick (~100 KB/s, đủ cho 921600 bps).
-    for (int k = 0; k < 4; ++k) {
-        std::uint8_t chunk[bringup::kGnssChunkMax];
-        const std::size_t n = cfg_.ports->read(g, chunk, sizeof(chunk));
-        if (n == 0) break;
-        nmea_.feed(chunk, n, [&](const device::GnssFix& fix, device::NmeaParser::Result kind) { on_nmea(fix, kind, now_ms); });
-        nmea_errors_ = nmea_.checksum_errors();
-        if (!forward_) continue;
-        msg::Buffer buf = msg::Buffer::copy_of(chunk, n);
-        if (!buf) {   // hết pool: bỏ gói này (xem "sys buffers")
-            ++gnss_dropped_;
-            continue;
-        }
-        ctx_->bus.publish(msg::Event::make(bringup::kGnssRxData, bringup::GnssDataHeader{static_cast<std::uint16_t>(n)},
-                                           std::move(buf)));
+SerialRole SerialBringup::role_of(svc::SerialMode m) {
+    switch (m) {
+        case svc::SerialMode::External: return SerialRole::Gcs;
+        case svc::SerialMode::Stream:   return SerialRole::Gnss;
+        case svc::SerialMode::Loopback: return SerialRole::Loopback;
+        default:                        return SerialRole::Disabled;
     }
 }
 
-// Một fix mỗi chu kỳ đo của máy thu: phát sau câu GGA (vị trí/độ cao/vệ tinh, ngày lấy từ RMC trước đó).
-// Máy thu chỉ phát RMC (không GGA trong 2 s): phát sau RMC.
-void SerialBringup::on_nmea(const device::GnssFix& fix, device::NmeaParser::Result kind, std::uint64_t now_ms) {
-    if (kind == device::NmeaParser::Result::Gga) {
-        last_gga_ms_ = now_ms;
-    } else if (last_gga_ms_ != 0 && now_ms < last_gga_ms_ + 2000) {
-        return;
-    }
-    fix_time_ms_ = fix.time_ms;
-    fix_lat_     = fix.lat_e7;
-    fix_lon_     = fix.lon_e7;
-    fix_flags_   = fix.flags;
-    fix_sats_    = fix.satellites;
-    fix_quality_ = fix.quality;
-    fix_count_.fetch_add(1);
-    ctx_->bus.publish(bringup::make_record(bringup::kGnssFix, fix));
-}
-
-void SerialBringup::publish_loopback() {
+void SerialBringup::publish_loopback(std::uint64_t now) {
     bringup::LoopbackHeader ls{};
     bringup::PortResult ports[bringup::kMaxSerial]{};
     ls.count = static_cast<std::uint8_t>(cfg_.ports->count());
     for (std::size_t i = 0; i < ls.count; ++i) {
         const svc::SerialPortStats s = cfg_.ports->stats(i);
-        ports[i].role   = static_cast<std::uint8_t>(role(i));
+        ports[i].role   = static_cast<std::uint8_t>(role_of(s.mode));
         ports[i].result = static_cast<std::uint8_t>(s.last);
         ports[i].pass   = s.pass;
         ports[i].fail   = s.fail;
@@ -138,18 +62,17 @@ void SerialBringup::publish_loopback() {
     }
     // Báo người vận hành khi một cổng đổi PASS <-> FAIL. Cổng chập chờn: tối đa 1 thông báo / kNoticeHoldMs
     // (trạng thái chi tiết luôn có trong LoopbackStatus).
-    const std::uint64_t now = osal::now_ms();
     for (std::size_t i = 0; i < ls.count; ++i) {
         const auto bit = static_cast<std::uint16_t>(1u << i);
         if (!(ls.tested_mask & bit) || ports[i].result == static_cast<std::uint8_t>(svc::LoopResult::None)) continue;
         const bool ok    = (ls.ok_mask & bit) != 0;
         const bool first = !(noticed_ & bit);
-        if (!first && (ok == ((noticed_ok_ & bit) != 0) || now - notice_ms_[i] < kNoticeHoldMs)) continue;
+        if (!first && (ok == ((noticed_ok_ & bit) != 0) || now < notice_ms_[i] + kNoticeHoldMs)) continue;
         if (ok) {
             bringup::notify(*ctx_, kTag, Severity::Info, "Serial %u loopback PASS", static_cast<unsigned>(i));
         } else {
             bringup::notify(*ctx_, kTag, Severity::Error, "Serial %u loopback FAIL (%s)", static_cast<unsigned>(i),
-                   svc::to_string(static_cast<svc::LoopResult>(ports[i].result)));
+                            svc::to_string(static_cast<svc::LoopResult>(ports[i].result)));
         }
         notice_ms_[i] = now;
         noticed_      = static_cast<std::uint16_t>(noticed_ | bit);
@@ -158,134 +81,29 @@ void SerialBringup::publish_loopback() {
     ctx_->bus.publish(msg::Event::make(bringup::kLoopbackStatus, ls, msg::Buffer::copy_of(ports, ls.count * sizeof(ports[0]))));
 }
 
-void SerialBringup::publish_status(std::uint64_t now_ms) {
-    bringup::BringupStatus bs{};
-    bs.uptime_ms    = static_cast<std::uint32_t>(now_ms);
-    bs.gnss_state   = gnss_state_;
-    bs.gcs_port     = cfg_.gcs_port >= 0 ? static_cast<std::uint8_t>(cfg_.gcs_port) : 0xFF;
-    bs.gnss_port    = cfg_.gnss_port >= 0 ? static_cast<std::uint8_t>(cfg_.gnss_port) : 0xFF;
-    bs.serial_count = static_cast<std::uint8_t>(cfg_.ports->count());
-    if (cfg_.gnss_port >= 0) {
-        const svc::SerialPortStats s = cfg_.ports->stats(static_cast<std::size_t>(cfg_.gnss_port));
-        bs.gnss_rx_bytes = s.rx_bytes;
-        bs.gnss_tx_bytes = s.tx_bytes;
-        bs.gnss_baudrate = s.baudrate;
-    }
-    ctx_->bus.publish(bringup::make_record(bringup::kBringupStatus, bs));
-}
-
-void SerialBringup::on_tick(std::uint64_t now_ms) {
-    update_gnss(now_ms);
-    if (now_ms >= next_report_) {
-        next_report_ = now_ms + report_ms_;
-        publish_loopback();
-    }
-    if (now_ms >= next_status_) {
-        next_status_ = now_ms + 1000;
-        publish_status(now_ms);
-    }
-}
+void SerialBringup::on_tick(std::uint64_t now_ms) { publish_loopback(now_ms); }
 
 void SerialBringup::on_event(const msg::Event& e) {
     svc::ParamChanged pc{};
-    if (e.id == svc::evt::kParamChanged && e.get(pc)) {
-        if (pc.id >= params::kSerPeriodMs && pc.id <= params::kGnssForward) apply_params();
-        if (pc.id == params::kGnssBaud && gnss_state_ != GnssState::Absent && cfg_.gnss_port >= 0) {
-            cfg_.ports->set_baudrate(static_cast<std::size_t>(cfg_.gnss_port), static_cast<std::uint32_t>(pc.value));
-        }
-        return;
-    }
-    bringup::GnssTxHeader req{};
-    if (e.id == bringup::kGnssTxRequest && e.get(req)) {
-        if (cfg_.gnss_port < 0 || gnss_state_ != GnssState::Connected) {
-            bringup::notify(*ctx_, kTag, Severity::Warning, "GNSS: not connected, command dropped");
-            return;
-        }
-        // Ghi UART có thể chặn (tới 100 ms) -> làm trên worker "gnss_tx", không giữ thread ứng dụng chung.
-        // Buffer chỉ tăng tham chiếu. Hàng đợi đầy -> bỏ lệnh và báo.
-        if (!worker_.post(e)) bringup::notify(*ctx_, kTag, Severity::Warning, "GNSS: tx queue full, command dropped");
-    }
-}
-
-void SerialBringup::on_job(const msg::Event& job) {   // thread worker "gnss_tx"
-    bringup::GnssTxHeader req{};
-    if (job.id != bringup::kGnssTxRequest || !job.get(req) || cfg_.gnss_port < 0) return;
-    const auto g = static_cast<std::size_t>(cfg_.gnss_port);
-    if (req.baudrate != 0 && core::is_ok(cfg_.ports->set_baudrate(g, req.baudrate))) {
-        bringup::notify(*ctx_, kTag, Severity::Notice, "GNSS: port baudrate -> %lu", static_cast<unsigned long>(req.baudrate));
-    }
-    const std::size_t n = job.buffer.size();
-    if (n > 0 && cfg_.ports->write(g, job.buffer.data(), n) != n) {
-        bringup::notify(*ctx_, kTag, Severity::Error, "GNSS: write failed");
+    if (e.id == svc::evt::kParamChanged && e.get(pc) && pc.id >= params::kSerPeriodMs && pc.id <= params::kSerReportMs) {
+        apply_params();   // ser.report_ms: chu kỳ tick đọc lại ở lần tick kế tiếp
     }
 }
 
 int SerialBringup::on_command(int argc, char** argv, svc::CommandOutput& out) {
-    if (std::strcmp(argv[0], "serial") == 0) {
-        if (argc >= 2 && std::strcmp(argv[1], "reset") == 0) {
-            for (std::size_t i = 0; i < cfg_.ports->count(); ++i) cfg_.ports->reset_counters(i);
-            out.print("counters cleared\r\n");
-            return 0;
-        }
-        static const char* const kRole[] = {"loopback", "gcs", "gnss", "disabled"};
-        out.print("port role      mode      last      pass      fail    rx bytes  baud\r\n");
-        for (std::size_t i = 0; i < cfg_.ports->count(); ++i) {
-            const svc::SerialPortStats s = cfg_.ports->stats(i);
-            out.print("%4u %-9s %-9s %-8s %8lu %9lu %11lu  %lu\r\n", static_cast<unsigned>(i),
-                      kRole[static_cast<int>(role(i))], svc::to_string(s.mode), svc::to_string(s.last),
-                      static_cast<unsigned long>(s.pass), static_cast<unsigned long>(s.fail),
-                      static_cast<unsigned long>(s.rx_bytes), static_cast<unsigned long>(s.baudrate));
-        }
+    if (argc >= 2 && std::strcmp(argv[1], "reset") == 0) {
+        for (std::size_t i = 0; i < cfg_.ports->count(); ++i) cfg_.ports->reset_counters(i);
+        out.print("counters cleared\r\n");
         return 0;
     }
-    // gnss ...
-    if (argc >= 3 && std::strcmp(argv[1], "send") == 0) {
-        char line[core::cfg::kCliLineMax + 2];
-        std::size_t n = 0;
-        for (int a = 2; a < argc; ++a) {   // ghép lại các từ (CommandService đã tách theo khoảng trắng)
-            for (const char* c = argv[a]; *c != '\0' && n < sizeof(line) - 2; ++c) line[n++] = *c;
-            if (a + 1 < argc && n < sizeof(line) - 2) line[n++] = ' ';
-        }
-        line[n++] = '\r';
-        line[n++] = '\n';
-        msg::Buffer buf = msg::Buffer::copy_of(line, n);
-        if (!buf) {
-            out.print("no buffer available\r\n");
-            return -1;
-        }
-        ctx_->bus.publish(msg::Event::make(bringup::kGnssTxRequest, bringup::GnssTxHeader{0}, std::move(buf)));
-        out.print("queued %u bytes\r\n", static_cast<unsigned>(n));
-        return 0;
-    }
-    if (argc >= 3 && std::strcmp(argv[1], "baud") == 0) {
-        const bringup::GnssTxHeader req{static_cast<std::uint32_t>(std::strtoul(argv[2], nullptr, 10))};
-        ctx_->bus.publish(msg::Event::make(bringup::kGnssTxRequest, req));
-        return 0;
-    }
-    if (cfg_.gnss_port < 0) {
-        out.print("no GNSS port\r\n");
-        return 0;
-    }
-    const svc::SerialPortStats s = cfg_.ports->stats(static_cast<std::size_t>(cfg_.gnss_port));
-    out.print("port %d state=%s rx=%lu tx=%lu overflow=%lu dropped=%lu baud=%lu forward=%d\r\n", cfg_.gnss_port,
-              bringup::to_string(gnss_state_.load()), static_cast<unsigned long>(s.rx_bytes),
-              static_cast<unsigned long>(s.tx_bytes), static_cast<unsigned long>(s.overflow),
-              static_cast<unsigned long>(gnss_dropped_.load()),
-              static_cast<unsigned long>(s.baudrate), forward_.load() ? 1 : 0);
-    const std::uint8_t fl = fix_flags_.load();
-    const std::uint32_t t  = fix_time_ms_.load();
-    const std::int32_t lat = fix_lat_.load(), lon = fix_lon_.load();
-    out.print("NMEA: %lu fix, %lu checksum errors | UTC %02lu:%02lu:%02lu.%03lu%s | ", static_cast<unsigned long>(fix_count_.load()),
-              static_cast<unsigned long>(nmea_errors_.load()), static_cast<unsigned long>(t / 3600000),
-              static_cast<unsigned long>(t / 60000 % 60), static_cast<unsigned long>(t / 1000 % 60),
-              static_cast<unsigned long>(t % 1000), (fl & device::GnssFix::kTimeValid) ? "" : " (invalid)");
-    if (fl & device::GnssFix::kPositionValid) {
-        out.print("lat %s%ld.%07ld lon %s%ld.%07ld q=%u sats=%u\r\n", lat < 0 ? "-" : "", static_cast<long>((lat < 0 ? -lat : lat) / 10000000),
-                  static_cast<long>((lat < 0 ? -lat : lat) % 10000000), lon < 0 ? "-" : "",
-                  static_cast<long>((lon < 0 ? -lon : lon) / 10000000), static_cast<long>((lon < 0 ? -lon : lon) % 10000000),
-                  static_cast<unsigned>(fix_quality_.load()), static_cast<unsigned>(fix_sats_.load()));
-    } else {
-        out.print("no position fix\r\n");
+    static const char* const kRole[] = {"loopback", "gcs", "gnss", "disabled"};
+    out.print("port role      mode      last      pass      fail    rx bytes  baud\r\n");
+    for (std::size_t i = 0; i < cfg_.ports->count(); ++i) {
+        const svc::SerialPortStats s = cfg_.ports->stats(i);
+        out.print("%4u %-9s %-9s %-8s %8lu %9lu %11lu  %lu\r\n", static_cast<unsigned>(i),
+                  kRole[static_cast<int>(role_of(s.mode))], svc::to_string(s.mode), svc::to_string(s.last),
+                  static_cast<unsigned long>(s.pass), static_cast<unsigned long>(s.fail),
+                  static_cast<unsigned long>(s.rx_bytes), static_cast<unsigned long>(s.baudrate));
     }
     return 0;
 }

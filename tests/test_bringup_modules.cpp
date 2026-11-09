@@ -9,7 +9,9 @@
 #include "mavlink_dialect.hpp"
 #include "mocks.hpp"
 #include "osal/time.hpp"
+#include "gnss_bringup/gnss_bringup.hpp"
 #include "serial_bringup/serial_bringup.hpp"
+#include "services/gnss_receiver.hpp"
 #include "messaging/buffer_allocators.hpp"
 #include "test_framework.hpp"
 
@@ -119,100 +121,210 @@ struct TxCapture final : mavlink2::Sender {
 };
 }  // namespace
 
-TEST(serial_bringup_gnss_absent_switches_to_loopback) {
+// Máy thu GNSS giả (không thread): test chính sách của GnssBringup.
+struct FakeGnss final : svc::IGnssReceiver {
+    bool started = false, data = false, tap = false;
+    std::uint32_t start_baud = 0, seq = 0;
+    device::GnssFix fix{};
+    std::string raw;
+    std::vector<std::pair<std::string, std::uint32_t>> sent;   // (dữ liệu, baud)
+    bool full = false;
+    core::Status start(std::uint32_t baud) override {
+        started    = true;
+        start_baud = baud;
+        return core::Status::Ok;
+    }
+    void stop() override { started = false; }
+    bool has_data() const override { return data; }
+    bool latest_fix(device::GnssFix& out, std::uint32_t& s) const override {
+        out = fix;
+        s   = seq;
+        return seq != 0;
+    }
+    void set_raw_tap(bool e) override { tap = e; }
+    std::size_t read_raw(std::uint8_t* d, std::size_t max) override {
+        const std::size_t k = std::min(max, raw.size());
+        std::memcpy(d, raw.data(), k);
+        raw.erase(0, k);
+        return k;
+    }
+    core::Status send(msg::Buffer b, std::uint32_t baud) override {
+        if (full) return core::Status::Busy;
+        sent.emplace_back(std::string(reinterpret_cast<const char*>(b.data()), b.size()), baud);
+        return core::Status::Ok;
+    }
+    svc::GnssStats stats() const override {
+        svc::GnssStats st;
+        st.rx_bytes = data ? 100 : 0;
+        st.baudrate = start_baud;
+        st.fixes    = seq;
+        return st;
+    }
+};
+
+TEST(serial_bringup_loopback_report_and_roles) {
     Ctx c;
     FakePorts ports;
-    app::SerialBringup m({&ports, 0, 1});
+    ports.st[0].mode = svc::SerialMode::External;   // giao diện
+    ports.st[1].mode = svc::SerialMode::Stream;     // máy thu GNSS
+    app::SerialBringup m({&ports});
     CHECK(core::is_ok(m.on_init(c.ctx)));
     CHECK(core::is_ok(m.on_start()));
+    CHECK(ports.started && ports.period == 200u && m.tick_period_ms() == 500u);
+
+    ports.st[2].mode = svc::SerialMode::Loopback; ports.st[2].last = svc::LoopResult::Pass; ports.st[2].pass = 7;
+    ports.st[3].mode = svc::SerialMode::Loopback; ports.st[3].last = svc::LoopResult::Timeout; ports.st[3].fail = 2;
+    m.on_tick(osal::now_ms());
+    bu::LoopbackHeader ls{};
+    CHECK(c.last(bu::kLoopbackStatus, ls));
+    CHECK_EQ(ls.count, 12);
+    const msg::Event* le = c.last_event(bu::kLoopbackStatus);
+    bu::PortResult pr[12]{};
+    CHECK(le != nullptr && le->buffer.size() == sizeof(pr));
+    if (le != nullptr && le->buffer.size() == sizeof(pr)) std::memcpy(pr, le->buffer.data(), sizeof(pr));
+    CHECK(pr[0].role == static_cast<std::uint8_t>(bu::SerialRole::Gcs));
+    CHECK(pr[1].role == static_cast<std::uint8_t>(bu::SerialRole::Gnss));
+    CHECK(pr[2].role == static_cast<std::uint8_t>(bu::SerialRole::Loopback));
+    CHECK(pr[4].role == static_cast<std::uint8_t>(bu::SerialRole::Disabled));
+    CHECK((ls.ok_mask & 0x4) && !(ls.ok_mask & 0x8) && (ls.tested_mask & 0xC) == 0xC && !(ls.tested_mask & 0x3));
+    CHECK_EQ(pr[2].pass, 7u);
+    CHECK(c.has_text("Serial 2 loopback PASS") && c.has_text("Serial 3 loopback FAIL (TIMEOUT)"));
+
+    // GNSS vắng -> cổng thành Loopback -> được báo như cổng loopback thường
+    ports.st[1].mode = svc::SerialMode::Loopback; ports.st[1].last = svc::LoopResult::Pass;
+    m.on_tick(osal::now_ms());
+    CHECK(c.last(bu::kLoopbackStatus, ls) && (ls.ok_mask & 0x2) && c.has_text("Serial 1 loopback PASS"));
+}
+
+TEST(gnss_bringup_absent_switches_port_to_loopback) {
+    Ctx c;
+    FakePorts ports;
+    FakeGnss rx;
+    app::GnssBringup m({&rx, &ports, 1, 0});
+    CHECK(core::is_ok(m.on_init(c.ctx)));
+    c.params.set(app::params::kGnssBaud, 9600);   // tham số đã nạp từ NV trước on_start
+    CHECK(core::is_ok(m.on_start()));
     const std::uint64_t t0 = osal::now_ms();
-    CHECK(ports.started && ports.st[1].mode == svc::SerialMode::Stream && ports.st[1].baudrate == 115200);
-    CHECK_EQ(ports.period, 200u);
+    CHECK(rx.started && rx.start_baud == 9600 && rx.tap);
 
     m.on_tick(t0 + 4900);
-    CHECK(m.gnss_state() == bu::GnssState::Detecting);
-    m.on_tick(t0 + 5100);   // hết cửa sổ 5 s, không có byte nào
-    CHECK(m.gnss_state() == bu::GnssState::Absent);
+    CHECK(m.state() == bu::GnssState::Detecting);
+    m.on_tick(t0 + 5100);   // hết cửa sổ 5 s, receiver chưa nhận byte nào
+    CHECK(m.state() == bu::GnssState::Absent && !rx.started);
     CHECK(ports.st[1].mode == svc::SerialMode::Loopback);
     CHECK(c.has_text("port 1 -> loopback"));
 
     // Lệnh GNSS khi không có máy thu bị bỏ, có thông báo
     m.on_event(msg::Event::make(bu::kGnssTxRequest, bu::GnssTxHeader{0}, msg::Buffer::copy_of("ABC", 3)));
-    CHECK(ports.tx[1].empty() && c.has_text("command dropped"));
-
-    // Báo cáo loopback: vai trò + kết quả từng cổng
-    ports.st[2].mode = svc::SerialMode::Loopback; ports.st[2].last = svc::LoopResult::Pass; ports.st[2].pass = 7;
-    ports.st[3].mode = svc::SerialMode::Loopback; ports.st[3].last = svc::LoopResult::Timeout; ports.st[3].fail = 2;
-    ports.st[1].last = svc::LoopResult::Pass;
-    m.on_tick(t0 + 10000);
-    bu::LoopbackHeader ls{};
-    CHECK(c.last(bu::kLoopbackStatus, ls));
-    CHECK_EQ(ls.count, 12);
-    const msg::Event* le = c.last_event(bu::kLoopbackStatus);
-    CHECK(le != nullptr && le->buffer.size() == 12 * sizeof(bu::PortResult));
-    bu::PortResult pr[12]{};
-    if (le != nullptr && le->buffer.size() == sizeof(pr)) std::memcpy(pr, le->buffer.data(), sizeof(pr));
-    CHECK(pr[0].role == static_cast<std::uint8_t>(bu::SerialRole::Gcs));
-    CHECK(pr[1].role == static_cast<std::uint8_t>(bu::SerialRole::Loopback));
-    CHECK((ls.ok_mask & 0x6) == 0x6 && (ls.ok_mask & 0x8) == 0);
-    CHECK((ls.tested_mask & 0xE) == 0xE && (ls.tested_mask & 0x1) == 0);
-    CHECK_EQ(pr[2].pass, 7u);
-    CHECK(c.has_text("Serial 3 loopback FAIL (TIMEOUT)"));
+    CHECK(rx.sent.empty() && c.has_text("command dropped"));
     bu::BringupStatus bs{};
-    CHECK(c.last_record(bu::kBringupStatus, bs) && bs.gnss_state == bu::GnssState::Absent && bs.gnss_port == 1);
+    CHECK(c.last_record(bu::kBringupStatus, bs) && bs.gnss_state == bu::GnssState::Absent && bs.gnss_port == 1 &&
+          bs.gcs_port == 0 && bs.serial_count == 12);
 }
 
-TEST(serial_bringup_gnss_connected_forwards_data_and_commands) {
+TEST(gnss_bringup_connected_publishes_fix_raw_and_commands) {
     Ctx c;
     FakePorts ports;
-    app::SerialBringup m({&ports, 0, 1});
+    FakeGnss rx;
+    app::GnssBringup m({&rx, &ports, 1, 0});
     m.on_init(c.ctx);
     m.on_start();
     const std::uint64_t t0 = osal::now_ms();
-    ports.incoming(1, std::string(100, 'N'));   // 100 byte NMEA trong 5 s đầu
+    rx.data = true;
+    rx.raw  = std::string(100, 'N');
     m.on_tick(t0 + 1200);
-    CHECK(m.gnss_state() == bu::GnssState::Connected);
-    CHECK(ports.st[1].mode == svc::SerialMode::Stream);
+    CHECK(m.state() == bu::GnssState::Connected && ports.st[1].mode != svc::SerialMode::Loopback);
     CHECK_EQ(c.rec.count(bu::kGnssRxData), 1u);   // 100 byte trong một buffer
     const msg::Event* ge = c.last_event(bu::kGnssRxData);
-    CHECK(ge != nullptr && ge->buffer.size() == 100 && Ctx::text_of(*ge) == std::string(100, 'N'));
-    m.on_tick(t0 + 9000);                          // đã kết nối: không bao giờ chuyển sang loopback
-    CHECK(m.gnss_state() == bu::GnssState::Connected);
+    CHECK(ge != nullptr && Ctx::text_of(*ge) == std::string(100, 'N'));
+    m.on_tick(t0 + 9000);   // đã kết nối: không bao giờ chuyển sang loopback
+    CHECK(m.state() == bu::GnssState::Connected);
 
-    // Lệnh GNSS được ghi trên worker "gnss_tx" của module (ghi UART có thể chặn), không trên thread ứng dụng.
-    CHECK(m.worker() != nullptr && core::is_ok(m.worker()->start()));
+    // Fix mới (seq tăng) -> đúng một kGnssFix; seq không đổi -> không phát lại
+    rx.fix.lat_e7 = 481173000; rx.fix.lon_e7 = 115166667; rx.fix.time_ms = 45319000;
+    rx.fix.flags  = device::GnssFix::kTimeValid | device::GnssFix::kPositionValid;
+    rx.seq        = 1;
+    m.on_tick(t0 + 9020);
+    m.on_tick(t0 + 9040);
+    device::GnssFix fix{};
+    CHECK(c.last_record(bu::kGnssFix, fix) && fix.lat_e7 == 481173000 && c.rec.count(bu::kGnssFix) == 1u);
+
+    // Lệnh tới máy thu -> hàng đợi gửi của service (không chặn thread ứng dụng)
     m.on_event(msg::Event::make(bu::kGnssTxRequest, bu::GnssTxHeader{38400}, msg::Buffer::copy_of("CFG\r\n", 5)));
-    CHECK(mock::wait_until([&] { return m.worker()->processed() >= 1; }));
-    m.worker()->stop();   // join: kết quả ghi của worker thấy được từ thread test
-    CHECK(ports.tx[1] == "CFG\r\n" && ports.st[1].baudrate == 38400);
+    CHECK(rx.sent.size() == 1 && rx.sent[0].first == "CFG\r\n" && rx.sent[0].second == 38400);
+    rx.full = true;
+    m.on_event(msg::Event::make(bu::kGnssTxRequest, bu::GnssTxHeader{0}, msg::Buffer::copy_of("X", 1)));
+    CHECK(c.has_text("tx queue full"));
+    rx.full = false;
 
-    // CLI "gnss send ..." -> event yêu cầu (thread kênh không ghi trực tiếp)
+    // CLI "gnss send ..." -> event yêu cầu; "gnss" -> trạng thái + fix
     char line[] = "gnss send $PCMD,1 2";
     CaptureOut out;
     c.cli.execute(line, out);
     const msg::Event* q = c.last_event(bu::kGnssTxRequest);
     CHECK(q != nullptr && Ctx::text_of(*q) == "$PCMD,1 2\r\n");
-
-    // NMEA được giải mã -> kGnssFix (một fix mỗi GGA; ngày lấy từ RMC trước đó)
-    ports.incoming(1, "$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A\r\n"
-                      "$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47\r\n");
-    m.on_tick(t0 + 9050);
-    device::GnssFix fix{};
-    CHECK(c.last_record(bu::kGnssFix, fix));
-    CHECK(fix.lat_e7 == 481173000 && fix.lon_e7 == 115166667 && fix.time_ms == 45319000u && fix.year == 1994);
-    CHECK_EQ(c.rec.count(bu::kGnssFix), 2u);   // RMC (chưa thấy GGA nào) + GGA
     char gl[] = "gnss";
     CaptureOut fo;
     c.cli.execute(gl, fo);
-    CHECK(fo.text.find("UTC 12:35:19.000") != std::string::npos && fo.text.find("lat 48.1173000 lon 11.5166667") != std::string::npos);
+    CHECK(fo.text.find("state=CONNECTED") != std::string::npos && fo.text.find("UTC 12:35:19.000") != std::string::npos &&
+          fo.text.find("lat 48.1173000 lon 11.5166667") != std::string::npos);
 
-    // gnss.forward = 0 -> không chuyển tiếp
+    // gnss.forward = 0 -> tắt tap của service, không chuyển tiếp
     c.params.set(app::params::kGnssForward, 0);
     for (const auto& e : std::vector<msg::Event>(c.rec.events)) m.on_event(e);
+    CHECK(!rx.tap);
     const std::size_t before = c.rec.count(bu::kGnssRxData);
-    ports.incoming(1, "XYZ");
+    rx.raw = "XYZ";
     m.on_tick(t0 + 9100);
     CHECK_EQ(c.rec.count(bu::kGnssRxData), before);
+}
+
+TEST(gnss_receiver_service_parses_taps_and_sends) {
+    PoolScope pool;
+    FakePorts ports;
+    svc::GnssReceiver rx;
+    svc::GnssReceiver::Config cfg;
+    cfg.ports = &ports;
+    cfg.port  = 1;
+    CHECK(rx.init(cfg) == core::Status::Ok);
+    cfg.port = 20;
+    svc::GnssReceiver bad;
+    CHECK(bad.init(cfg) == core::Status::InvalidArg);
+
+    // Không chạy thread: điều khiển từng vòng bằng process() (thread thật chạy đúng vòng này)
+    CHECK(!rx.has_data());
+    rx.set_raw_tap(true);
+    std::uint64_t now = 1000;
+    ports.incoming(1, "$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A\r\n");
+    rx.process(0, now);
+    device::GnssFix f{};
+    std::uint32_t seq = 0;
+    CHECK(rx.has_data() && rx.latest_fix(f, seq) && seq == 1);   // chưa thấy GGA: gom fix theo RMC
+    ports.incoming(1, "$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47\r\n");
+    rx.process(0, now += 100);
+    CHECK(rx.latest_fix(f, seq) && seq == 2 && f.year == 1994 && f.alt_mm == 545400);
+    ports.incoming(1, "$GPRMC,123520,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*60\r\n");
+    rx.process(0, now += 900);   // đã có GGA đều đặn: RMC không tạo fix mới
+    CHECK(rx.latest_fix(f, seq) && seq == 2);
+    ports.incoming(1, "$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*00\r\n");   // sai checksum
+    rx.process(0, now += 3000);
+    svc::GnssStats st = rx.stats();
+    CHECK(st.sentences == 3 && st.checksum_errors == 1 && st.fixes == 2 && st.last_rx_ms == now && st.rx_bytes > 200);
+
+    // Tap: đúng byte thô theo thứ tự
+    std::uint8_t raw[512];
+    const std::size_t n = rx.read_raw(raw, sizeof(raw));
+    CHECK(n == st.rx_bytes && std::memcmp(raw, "$GPRMC,123519", 13) == 0);
+
+    // Gửi lệnh: hàng đợi (không chặn) -> ghi + đổi baud ở vòng xử lý
+    CHECK(rx.send(msg::Buffer::copy_of("CFG\r\n", 5), 38400) == core::Status::Ok);
+    CHECK(rx.send(msg::Buffer{}, 0) == core::Status::InvalidArg);
+    for (std::size_t k = 1; k < svc::GnssReceiver::kTxQueue; ++k) rx.send(msg::Buffer::copy_of("Q", 1));
+    CHECK(rx.send(msg::Buffer::copy_of("Z", 1)) == core::Status::Busy);
+    rx.process(0, now);
+    CHECK(ports.tx[1] == "CFG\r\n" && ports.st[1].baudrate == 38400 && rx.stats().baudrate == 38400);
+    st = rx.stats();
+    CHECK(st.tx_bytes == 5 && st.tx_dropped == 1);
 }
 
 TEST(io_bringup_outputs_and_inputs) {

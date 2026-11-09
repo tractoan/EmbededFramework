@@ -158,6 +158,7 @@
 | 2026-11-09 | | Cập nhật theo main (QNX): HAL dùng chung tách `common/posix` + `common/linux`, `linux_cpu` dùng `EP_HAL_COMMON="posix;linux"`. Không đổi yêu cầu. |
 | 2026-11-09 | | Cập nhật theo main (ModuleWorker): ghi lệnh GNSS chuyển sang worker `gnss_tx` riêng của `SerialBringup`. Không đổi yêu cầu. |
 | 2026-11-09 | | GNS-08: giải mã NMEA (GGA/RMC) gửi giờ UTC, lat, lon lên PC qua `GNSS_FIX` + `GPS_RAW_INT`. |
+| 2026-11-09 | | Tách GNSS: `svc::GnssReceiver` (service: đọc/giải mã NMEA, gửi lệnh) + `app::GnssBringup` (business: luật 5 s, báo cáo); `SerialBringup` chỉ còn loopback. Không đổi yêu cầu. |
 | | | |
 
 ---

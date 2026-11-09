@@ -14,6 +14,7 @@
 #include "io_bringup/io_bringup.hpp"
 #include "mavlink2/mavlink_protocol.hpp"
 #include "mavlink_dialect.hpp"
+#include "gnss_bringup/gnss_bringup.hpp"
 #include "serial_bringup/serial_bringup.hpp"
 #include "device/digital_io.hpp"
 #include "services/hdlc_imu.hpp"
@@ -44,6 +45,7 @@ svc::SerialPortBank g_ports;
 device::GpioInputBank g_inputs;
 device::GpioOutputBank g_outputs;
 svc::HdlcImu g_imu[hw::kImuCount];
+svc::GnssReceiver g_gnss;   // dịch vụ máy thu GNSS trên cổng hw::kGnssPort
 
 core::Status setup_serial(hal::IBoard& board) {
     static char names[hw::kSerialCount][8];
@@ -112,15 +114,26 @@ void setup_tasks(app::TaskPlan& t) {
     t.leds = osal::ThreadConfig{"led", osal::Priority::Low, 1024, nullptr};
 }
 
+// Dịch vụ GNSS: thread "gnss" cùng mức ưu tiên với cổng GNSS (đọc/giải mã + gửi lệnh cấu hình).
+core::Status setup_gnss() {
+    if (hw::kGnssPort < 0) return core::Status::Ok;
+    svc::GnssReceiver::Config c;
+    c.ports    = &g_ports;
+    c.port     = static_cast<std::size_t>(hw::kGnssPort);
+    c.baudrate = 115200;   // GnssBringup khởi động với tham số gnss.baud
+    c.task     = osal::ThreadConfig{"gnss", kGnssPortPriority, 2048, nullptr};
+    return g_gnss.init(c);
+}
+
 core::Status setup_modules(app::ModuleManager& modules) {
-    static app::SerialBringup serial(app::SerialBringup::Config{&g_ports, hw::kGcsPort, hw::kGnssPort});
+    static app::SerialBringup serial(app::SerialBringup::Config{&g_ports});
+    static app::GnssBringup gnss(app::GnssBringup::Config{&g_gnss, &g_ports, hw::kGnssPort, hw::kGcsPort});
     static app::IoBringup io(&g_inputs, &g_outputs);
     static device::IImu* const imus[hw::kImuCount] = {&g_imu[0], &g_imu[1]};
     static app::ImuBringup imu(imus, hw::kImuCount);
 
-    // Worker ghi lệnh GNSS: cùng mức ưu tiên với cổng GNSS (lệnh cấu hình không bị các cổng loopback chặn).
-    static const osal::ThreadConfig gnss_tx{"gnss_tx", kGnssPortPriority, 2048, nullptr};
-    core::Status st = modules.add(&serial, &gnss_tx);
+    core::Status st = modules.add(&serial);
+    if (core::is_ok(st)) st = modules.add(&gnss);
     if (core::is_ok(st)) st = modules.add(&io);
     if (core::is_ok(st)) st = modules.add(&imu);
     return st;
@@ -189,6 +202,8 @@ core::Status setup(app::ProductSetup& s) {
     core::Status st = setup_serial(s.board);
     if (!core::is_ok(st)) return st;
     setup_io(s.board);
+    st = setup_gnss();
+    if (!core::is_ok(st)) return st;
     setup_imu(s.board);
     st = setup_modules(s.modules);
     return core::is_ok(st) ? setup_links(s) : st;

@@ -16,10 +16,12 @@ Firmware chạy trên **CPU nhúng (Linux)** để kiểm tra bo mạch, báo k�
 
 ```
  products/hw_bringup   product.cpp (lắp ráp) · bringup_config.hpp (ánh xạ cổng/IMU) · mavlink_dialect.cpp (Event <-> bản tin)
- app/business          SerialBringup (loopback + phát hiện GNSS) · IoBringup · ImuBringup   (chỉ nói chuyện qua Event/Param)
+ app/business          SerialBringup (loopback, vai trò cổng) · GnssBringup (luật 5 s, fix/thô/lệnh) · IoBringup · ImuBringup
+                       (chỉ CHÍNH SÁCH, nói chuyện qua Event/Param + interface service)
  communication/mavlink2 Mavlink2Protocol: khung v2 (+nhận v1), heartbeat, PARAM_* <-> ParamStore, COMMAND_LONG/ACK, IDialect
  communication/net     UdpStream: kênh MAVLink thứ hai qua mạng (khi target có TCP/IP)
- services              SerialPortBank (thread/cổng: Loopback|Stream|External) · HdlcImu (thread đọc khung)
+ services              SerialPortBank (thread/cổng: Loopback|Stream|External) · GnssReceiver (thread: NMEA, fix, gửi lệnh)
+                       · HdlcImu (thread đọc khung)   (CƠ CHẾ, không biết khái niệm bring-up)
  platform/device       GpioInput/OutputBank (DI/DO) · ImuFormat + decode_imu_frame (giải mã theo bảng) · NmeaParser (GGA/RMC)
  platform/hal          IBoard::serial(i) / digital_input(i) / digital_output(i) / hdlc(i) · IHdlcPort
    ports/linux_cpu     termios(+RS485) · GPIO chardev v2 · SyncLink/N_HDLC/chardev/AF_PACKET · file NV
@@ -37,7 +39,7 @@ Luồng: thread cổng/IMU → service (atomic, ring buffer) → module (thread 
   payload inline giữ mặc định 16 B. Hết pool → gói đó bị bỏ và được đếm (`sys buffers`, `gnss`).
   Bộ đệm của phần cứng mô phỏng và port `linux_cpu` cũng là mảng cố định.
 - **Stack**: 19 task lấy stack từ vùng tĩnh `EP_CFG_STACK_POOL_BYTES` = 56 KB (dùng ~47 KB), `EP_CFG_MAX_THREADS` = 24.
-- **Priority** (0..15, `product.cpp`): IMU 12 · cổng GNSS + worker `gnss_tx` 10 · kênh giao diện (serial + UDP) 9 · nghiệp vụ `app` 8 · cổng loopback 5 ·
+- **Priority** (0..15, `product.cpp`): IMU 12 · cổng GNSS + dịch vụ `gnss` 10 · kênh giao diện (serial + UDP) 9 · nghiệp vụ `app` 8 · cổng loopback 5 ·
   console 4 · LED 4. Xem lúc chạy: `sys tasks`. Trên target `linux_cpu` priority là SCHED_FIFO thật
   (`EP_POSIX_REALTIME`; cần root hoặc `setcap cap_sys_nice+ep firmware`, không có quyền thì chạy SCHED_OTHER).
 
@@ -66,9 +68,9 @@ bằng `mavgen` (C#, C++, Python...). System/component của firmware: 1/1; hear
 | ↓↑ | `PARAM_REQUEST_LIST/READ`, `PARAM_SET` → `PARAM_VALUE` | tham số (kiểu INT32, mã hóa C-cast) |
 | ↓ | `COMMAND_LONG` `MAV_CMD_PREFLIGHT_STORAGE` | param1: 0 đọc NV, 1 lưu NV, 2 mặc định |
 
-Lệnh GNSS chỉ được gửi khi máy thu ở trạng thái CONNECTED (ngược lại: bỏ và báo `STATUSTEXT`). Việc ghi UART/đổi
-baudrate chạy trên worker riêng `gnss_tx` của `SerialBringup` (`app::ModuleWorker`, hàng đợi 8 lệnh) để thread
-nghiệp vụ chung không bị chặn; xem `sys modules` (jobs/dropped).
+Lệnh GNSS chỉ được gửi khi máy thu ở trạng thái CONNECTED (ngược lại: bỏ và báo `STATUSTEXT`) – quy tắc của
+`GnssBringup`. Việc ghi UART/đổi baudrate do thread của `svc::GnssReceiver` làm (hàng đợi 8 lệnh, không chặn thread
+nghiệp vụ); hàng đợi đầy -> bỏ và báo. Xem `gnss` (`tx_dropped`).
 
 ### Tham số
 
@@ -92,6 +94,16 @@ Kết quả: `PASS`, `TIMEOUT` (không nhận gì), `MISMATCH` (sai/thiếu byte
   `kLoopbackPeer` trong `bringup_config.hpp` (cổng chỉ số nhỏ điều khiển cả hai chiều).
 
 ## GNSS: giải mã NMEA
+
+Phân lớp (service = cơ chế, business = chính sách):
+
+| Lớp | Thành phần | Việc |
+|---|---|---|
+| device | `device::NmeaParser` | ghép câu, kiểm checksum, giải mã GGA/RMC – hàm thuần |
+| service | `svc::GnssReceiver : IGnssReceiver` (thread `gnss`) | dùng cổng Stream của `ISerialPorts`; rút byte, giải mã, gom fix (`latest_fix()` + số thứ tự), bản sao byte thô (`read_raw()`), hàng đợi lệnh/đổi baud (`send()`), thống kê |
+| business | `app::GnssBringup` | luật `gnss.detect_ms`: không có byte -> dừng receiver, chuyển cổng sang loopback; phát `kGnssFix` khi số thứ tự fix đổi, chuyển tiếp thô nếu `gnss.forward`, chỉ nhận lệnh khi CONNECTED, `BringupStatus`, lệnh CLI `gnss` |
+
+Sản phẩm/dự án khác cần vị trí GNSS dùng thẳng `svc::GnssReceiver` (không cần module bring-up).
 
 `device::NmeaParser` (`platform/device/src/nmea.cpp`, hàm thuần, số nguyên – không cần FPU) nhận từng byte từ cổng
 máy thu, ghép câu `$...*hh`, **bắt buộc đúng checksum**, giải mã **GGA** (giờ, lat/lon, chất lượng fix, số vệ tinh,

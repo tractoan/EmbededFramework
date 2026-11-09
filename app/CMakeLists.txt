@@ -18,6 +18,7 @@ target_link_libraries(ep_business PUBLIC ep_app_runtime)
 # Dữ liệu lớn đi qua Event::buffer (svc::Buffer) nên không cần nới EP_CFG_EVENT_PAYLOAD_SIZE.
 add_library(ep_business_bringup STATIC
   business/serial_bringup/serial_bringup.cpp
+  business/gnss_bringup/gnss_bringup.cpp
   business/io_bringup/io_bringup.cpp
   business/imu_bringup/imu_bringup.cpp)
 target_link_libraries(ep_business_bringup PUBLIC ep_business)
