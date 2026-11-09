@@ -1,9 +1,19 @@
 #include <chrono>
 #include <cstring>
 
-#if defined(__linux__)
+#if defined(__linux__) || defined(__QNX__)
 #include <pthread.h>
 #include <sched.h>
+#endif
+
+// EP_POSIX_REALTIME: mức 0..15 -> SCHED_FIFO EP_POSIX_RT_PRIO_BASE + mức * EP_POSIX_RT_PRIO_STEP.
+// Mặc định 10..85: Linux – chừa chỗ cho IRQ thread của kernel (50) và tác vụ hệ thống;
+// QNX – dải 1..255, mức > 63 cần quyền PROCMGR_AID_PRIORITY (root); driver của BSP thường ở 21..30.
+#ifndef EP_POSIX_RT_PRIO_BASE
+#define EP_POSIX_RT_PRIO_BASE 10
+#endif
+#ifndef EP_POSIX_RT_PRIO_STEP
+#define EP_POSIX_RT_PRIO_STEP 5
 #endif
 
 #include "osal/memory.hpp"
@@ -83,18 +93,17 @@ core::Status Thread::start(const ThreadConfig& cfg, Entry entry, void* arg) {
         h_.t = std::thread(&Thread::trampoline, this);
     }
     started_ = true;
-#if defined(__linux__)
-    char name[16] = {};
+#if defined(__linux__) || defined(__QNX__)
+    char name[16] = {};   // Linux: tối đa 15 ký tự; QNX cho phép dài hơn
     std::strncpy(name, cfg.name ? cfg.name : "ep", sizeof(name) - 1);
     pthread_setname_np(h_.t.native_handle(), name);
 #else
     (void)cfg;
 #endif
-#if defined(EP_POSIX_REALTIME) && defined(__linux__)
-    // Linux thật (vd. APU Zynq UltraScale+): mức 0..15 -> SCHED_FIFO 10..85 (khoảng trống cho IRQ thread
-    // của kernel ở 50 và các tác vụ hệ thống). Cần CAP_SYS_NICE/root; không có quyền thì giữ SCHED_OTHER.
+#if defined(EP_POSIX_REALTIME) && (defined(__linux__) || defined(__QNX__))
+    // Linux/QNX thật: không có quyền thì OS từ chối, thread giữ chính sách mặc định (target in cảnh báo).
     sched_param sp{};
-    sp.sched_priority = 10 + 5 * cfg.priority.level();
+    sp.sched_priority = EP_POSIX_RT_PRIO_BASE + EP_POSIX_RT_PRIO_STEP * cfg.priority.level();
     pthread_setschedparam(h_.t.native_handle(), SCHED_FIFO, &sp);
 #endif
     // Không bật EP_POSIX_REALTIME (mô phỏng/test trên host): priority chỉ được ghi nhận để hiển thị.
