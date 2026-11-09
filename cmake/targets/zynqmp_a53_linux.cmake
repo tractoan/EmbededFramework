@@ -10,7 +10,7 @@
 # chạy với quyền root hoặc `setcap cap_sys_nice,cap_ipc_lock+ep firmware`.
 set(EP_OSAL_PORT  posix)
 set(EP_HAL_PORT   zynqmp_linux)
-set(EP_HAL_COMMON linux)
+set(EP_HAL_COMMON "posix;linux")
 set(EP_NET_PORT   posix)
 
 find_package(Threads REQUIRED)
