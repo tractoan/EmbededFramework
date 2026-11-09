@@ -1,7 +1,7 @@
 #pragma once
 // Peripheral THẬT trên Linux (CPU nhúng x86/ARM chạy Linux) riêng của board bring-up: tty có RS485,
 // GPIO character device v2 có bias/active-low, cổng SDLC/HDLC (SyncLink/N_HDLC, chardev, netdev generic-HDLC).
-// Console stdio và Flash = file dùng chung: platform/hal/ports/common/linux (hal::host).
+// Console stdio và Flash = file dùng chung: platform/hal/ports/common/posix (hal::host).
 #include <atomic>
 #include <string>
 #include <utility>

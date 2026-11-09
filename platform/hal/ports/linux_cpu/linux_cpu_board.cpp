@@ -9,7 +9,7 @@
 #include <string>
 
 #include "board_config.hpp"
-#include "linux/linux_hal.hpp"
+#include "posix/posix_hal.hpp"
 #include "linux_peripherals.hpp"
 
 namespace hal {

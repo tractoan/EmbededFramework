@@ -46,14 +46,14 @@ Mục tiêu:
 │  Thread · Mutex · Semaphore      │  IGpio · IUart · II2c · INvStorage  │
 │                                  │  IHdlcPort (SDLC/HDLC)              │
 │  Queue<T,N> · time · Critical    │  IBoard (ID logic -> chân vật lý)   │
-│  ports: posix·freertos·ucos2/3   │  ports: sim·stm32f4·zynqmp_linux/r5 │
+│  ports: posix·freertos·ucos2/3   │  ports: sim·stm32f4·zynqmp·qnx      │
 │                                  │         linux_cpu (bring-up)        │
 ├──────────────────────────────────┴─────────────────────────────────────┤
 │ CORE (core/)   Status · NonCopyable · config.hpp · compiler macros     │
 └────────────────────────────────────────────────────────────────────────┘
  UTILS (utils/) – thư viện độc lập, mọi lớp đều dùng được:
    crc32/crc16 · fixed-point format · RingBuffer (SPSC)
-   Vendor SDK / Kernel: STM32Cube HAL, FreeRTOS, Zephyr, Linux, ESP-IDF...
+   Vendor SDK / Kernel: STM32Cube HAL, FreeRTOS, Zephyr, Linux, QNX, ESP-IDF...
 ```
 
 | Lớp | Trách nhiệm | KHÔNG được làm | Cơ chế đa hình |
@@ -109,9 +109,9 @@ Lớp dưới không bao giờ biết lớp trên; giao tiếp ngược lên ch�
 EmbededFramework/
 ├── CMakeLists.txt              # EP_TARGET, EP_PRODUCT
 ├── main.cpp                    # entry point duy nhất (mọi target, mọi sản phẩm)
-├── cmake/targets/              # linux_sim, linux_cpu, stm32f4_{freertos,ucos2,ucos3}, zynqmp_{a53_linux,r5_freertos}
+├── cmake/targets/              # linux_sim, linux_cpu, stm32f4_{freertos,ucos2,ucos3}, zynqmp_{a53_linux,r5_freertos}, qnx
 │   └── common/stm32f4_cube.cmake   # phần CubeMX dùng chung cho mọi target STM32F4
-├── cmake/toolchains/           # arm-none-eabi, armr5-none-eabi, aarch64-linux-gnu
+├── cmake/toolchains/           # arm-none-eabi, armr5-none-eabi, aarch64-linux-gnu, qnx (qcc)
 ├── utils/include/utils/        # crc.hpp, fixed_point.hpp, ring_buffer.hpp  (độc lập)
 ├── platform/                   # TẦNG NỀN TẢNG
 │   ├── core/include/core/      # status.hpp, config.hpp, noncopyable.hpp, compiler.hpp
@@ -121,13 +121,17 @@ EmbededFramework/
 │   ├── hal/
 │   │   ├── include/hal/        # gpio, uart, i2c, storage, hdlc, board, wait
 │   │   └── ports/
-│   │       ├── common/linux/   # dùng chung cho mọi board Linux: termios UART, /dev/i2c-N,
-│   │       │                   # GPIO chardev v2, file/EEPROM sysfs (EP_HAL_COMMON=linux)
+│   │       ├── common/         # mã dùng chung, chọn bằng danh sách EP_HAL_COMMON:
+│   │       │   ├── posix/      #   mọi OS POSIX: console stdio, UART termios, FileStorage
+│   │       │   ├── linux/      #   Linux: /dev/i2c-N, GPIO chardev v2
+│   │       │   ├── qnx/        #   QNX: I2C resource manager (devctl), GPIO thanh ghi (mmap_device_memory)
+│   │       │   └── mmio/       #   GPIO thanh ghi memory-mapped, header-only (test được trên host)
 │   │       ├── linux_sim/      # PC: cảm biến/GPIO giả lập (+ 12 serial, 20 DI/DO, 2 IMU cho hw_bringup)
 │   │       ├── linux_cpu/      # CPU Linux của bo bring-up: tty RS485, GPIO bias/active-low, SDLC/HDLC
 │   │       ├── stm32f4/        # STM32Cube HAL
 │   │       ├── zynqmp_linux/   # Zynq UltraScale+ APU (Cortex-A53) chạy Linux
-│   │       └── zynqmp_r5/      # Zynq UltraScale+ RPU (Cortex-R5F): XGpioPs, XUartPs, XIicPs, EEPROM 24xx
+│   │       ├── zynqmp_r5/      # Zynq UltraScale+ RPU (Cortex-R5F): XGpioPs, XUartPs, XIicPs, EEPROM 24xx
+│   │       └── qnx/            # mọi board có BSP QNX: cấu hình thiết bị bằng biến môi trường
 │   ├── net/                    # TCP/IP: include/net/net.hpp, ports/{posix,lwip}
 │   ├── device/
 │   │   └── include/device/     # temperature_sensor, tmp102, digital_io, imu (+ImuFormat)
@@ -140,6 +144,7 @@ EmbededFramework/
 │       ├── stm32f4_ucos3/      # ... CPU_Init/OSInit/OSStart, SysTick + PendSV cho uC/OS-III
 │       ├── zynqmp_a53_linux/   # như linux_sim + mlockall, kiểm tra quyền SCHED_FIFO
 │       ├── zynqmp_r5_freertos/ # task init + scheduler (BSP Xilinx khởi tạo clock/GIC/tick)
+│       ├── qnx/                # như linux_sim + mlockall, kiểm tra quyền priority, bỏ qua SIGPIPE
 │       └── common/{stm32f4,freertos}/   # clock_config.c; hook cấp phát tĩnh FreeRTOS dùng chung
 ├── messaging/
 │   └── include/messaging/      # event, event_bus, buffer, buffer_allocators     (ep_messaging)
@@ -284,7 +289,7 @@ vùng RAM riêng). Mỗi port ánh xạ tuyến tính 16 mức sang priority nat
 | FreeRTOS | `configMAX_PRIORITIES-1` … `tskIDLE_PRIORITY` (số lớn = cao) | – |
 | uC/OS-II | `EP_UCOS2_PRIO_TOP` (4) … tăng `EP_UCOS2_PRIO_STRIDE` (3) mỗi mức (số nhỏ = cao); tối đa STRIDE task cùng mức (priority native duy nhất) | kiểm tra lúc build so với `OS_LOWEST_PRIO` |
 | uC/OS-III | `EP_UCOS3_PRIO_TOP` (4) … +1 mỗi mức; nhiều task cùng mức chạy round-robin | kiểm tra lúc build so với `OS_CFG_PRIO_MAX` |
-| POSIX (host) | Mặc định bỏ qua (chỉ ghi nhận để hiển thị). Với `EP_POSIX_REALTIME=1` (target `zynqmp_a53_linux`): `SCHED_FIFO` 85 … 10 (`10 + 5·mức`); thiếu quyền thì giữ `SCHED_OTHER` và target in cảnh báo | `CAP_SYS_NICE` hoặc root; target gọi thêm `mlockall` để tránh page fault |
+| POSIX (Linux, QNX) | Mặc định bỏ qua (chỉ ghi nhận để hiển thị). Với `EP_POSIX_REALTIME=1` (target `zynqmp_a53_linux`, `qnx`): `SCHED_FIFO` 85 … 10 (`EP_POSIX_RT_PRIO_BASE + EP_POSIX_RT_PRIO_STEP·mức`, mặc định 10 + 5·mức); thiếu quyền thì giữ chính sách mặc định và target in cảnh báo | Linux: `CAP_SYS_NICE` hoặc root. QNX: priority > 63 cần `PROCMGR_AID_PRIORITY` (root). Target gọi thêm `mlockall` |
 
 ---
 
@@ -499,8 +504,9 @@ cmake -B build-my -DEP_PRODUCT=my_product
 3. Tạo `platform/target/<board>_<os>/` hiện thực `target::init()` (HAL vendor, clock, ngoại vi),
    `target::run()` (gọi `app_main` trong ngữ cảnh đúng, vd. task + start scheduler) và `target::stop_requested()`.
 4. Tạo `cmake/targets/<board>_<os>.cmake` đặt `EP_HAL_PORT=<board>`, `EP_OSAL_PORT`, toolchain/cờ CPU.
-   Board chạy **Linux** (Raspberry Pi, i.MX, Zynq APU…): đặt thêm `EP_HAL_COMMON=linux` và chỉ viết file
+   Board chạy **Linux** (Raspberry Pi, i.MX, Zynq APU…): đặt thêm `EP_HAL_COMMON "posix;linux"` và chỉ viết file
    `IBoard` ánh xạ ID → `/dev/ttyX`, `/dev/i2c-N`, GPIO line (xem `ports/zynqmp_linux/`) – driver đã có sẵn.
+   Board chạy **QNX**: thường không cần port mới – target `qnx` cấu hình mọi thiết bị bằng biến môi trường.
    Tên file phải trùng tên thư mục ở bước 3. Build bằng `-DEP_TARGET=<board>_<os>`.
    ⇒ `main.cpp`, Services, App, Product **không đổi một dòng**.
 
@@ -712,6 +718,57 @@ bằng chính các giao thức CLI/Modbus/MAVLink của framework; OpenAMP/RPMsg
   của Xilinx embeddedsw (driver gpiops/uartps/iicps, standalone, FreeRTOS port ARM_CR5); mọi symbol driver mà
   framework dùng đều link được với các driver đó. `xparameters.h`/`FreeRTOSConfig.h` là bản giả lập theo ZCU102,
   chưa link với một BSP Vitis hoàn chỉnh. **Chưa chạy trên phần cứng.**
+
+### QNX Neutrino 7.1 / 8.0
+
+Target `qnx` chạy trên **mọi board có BSP QNX** (i.MX8, Zynq UltraScale+, TI AM6x/J7, Raspberry Pi 4,
+x86_64…) mà không cần port riêng: driver là resource manager của BSP, firmware chỉ ánh xạ ID logic → thiết bị.
+
+| Thành phần | Hiện thực | Ghi chú |
+|---|---|---|
+| OSAL | `posix` (pthread) + `EP_POSIX_REALTIME` → `SCHED_FIFO` 10..85 | đổi dải bằng `EP_POSIX_RT_PRIO_BASE/STEP` trong `cmake/targets/qnx.cmake` nếu đè lên driver của BSP |
+| Console | stdin/stdout | chạy trên console serial hoặc qua ssh/telnet |
+| Aux UART | `TermiosUart` trên `/dev/ser2` (devc-ser*) | `EP_QNX_AUX_UART` (`""` = tắt) |
+| I2C | `QnxI2c`: `devctl(DCMD_I2C_SEND/RECV/SENDRECV)` tới `/dev/i2c1` (i2c-imx, i2c-cdns…), repeated start | `EP_QNX_SENSOR_I2C`, `EP_QNX_I2C_SPEED` (Hz) |
+| GPIO | `MmioGpio`: QNX không có API GPIO chuẩn → ánh xạ thanh ghi khối GPIO (`mmap_device_memory`) | `EP_QNX_GPIO_STATUS_LED`, `EP_QNX_GPIO_ALARM_LED`, `EP_QNX_GPIO_BUTTON`; trống = không dùng |
+| NV storage | `FileStorage` `/data/embededframework/nvram.bin` | `EP_QNX_NVRAM` – đặt trên filesystem ghi được, bền vững (qnx6fs) |
+| Mạng | port `posix` (BSD socket, io-pkt/io-sock), link `libsocket` | – |
+| Reset | thoát tiến trình | để SLM (System Launch and Monitor) khởi động lại |
+
+Chuỗi GPIO mô tả thanh ghi của khối GPIO (`platform/hal/ports/common/mmio/mmio_gpio.hpp`): `base` (địa chỉ vật
+lý), `out`, `in`, `dir` (1 = output) hoặc `dir_n` (0 = output), `oen` (output enable), `set`/`clr` (thanh ghi
+W1S/W1C – ghi atomic), `bit`, `active_low`. Pull-up/down thuộc pinmux của SoC – cấu hình trong BSP/startup.
+
+```bash
+source <qnx-sdp>/qnxsdp-env.sh
+cmake -B build-qnx -DEP_TARGET=qnx -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/qnx.cmake   # -DEP_QNX_ARCH=x86_64
+cmake --build build-qnx -j
+```
+```bash
+# trên target (root, hoặc cấp ability PROCMGR_AID_PRIORITY / MEM_LOCK / MEM_PHYS)
+EP_QNX_AUX_UART=/dev/ser1 EP_QNX_SENSOR_I2C=/dev/i2c0 \
+EP_QNX_GPIO_STATUS_LED="base=0xFF0A0000,out=0x40,in=0x60,dir=0x204,oen=0x208,bit=23" \
+EP_QNX_NVRAM=/data/ep/nvram.bin ./firmware
+./ep_tests                      # unit test (kể cả test HAL POSIX/QNX) chạy ngay trên target
+```
+Ví dụ chuỗi GPIO: ZynqMP MIO23 như trên; i.MX8M GPIO1_IO13 `base=0x30200000,out=0x0,in=0x8,dir=0x4,bit=13`;
+TI AM335x GPIO0_21 `base=0x44E07000,out=0x13C,in=0x138,dir_n=0x134,set=0x194,clr=0x190,bit=21`.
+Khối GPIO kiểu "function select" (Raspberry Pi BCM2711) không theo mô hình này – cần một `IGpio` riêng.
+Đọc-sửa-ghi thanh ghi được khóa trong tiến trình; nếu một driver QNX khác cũng dùng cùng bank GPIO, hãy chọn
+chân có thanh ghi `set`/`clr` hoặc dành cả bank cho firmware.
+
+**Mức độ kiểm chứng:** chưa có QNX SDP (cần license) nên **chưa biên dịch bằng qcc và chưa chạy trên QNX
+thật**. Mã QNX được biên dịch (`-Wall -Wextra`, không warning) với header `hw/i2c.h` thật của QNX (bản trong BSP
+công khai) và một lớp giả lập `devctl`/`mmap_device_memory` trên Linux (không nằm trong repo), trên đó:
+- toàn bộ unit test pass; `QnxI2c` được thử riêng: bố cục gói tin, SEND/RECV/SENDRECV, NACK, giới hạn kích thước;
+- firmware: đọc nhiệt độ qua `QnxI2c` → TMP102 giả; Modbus RTU qua pty; MAVLink qua TCP (đọc/ghi tham số);
+  tham số giữ được sau khởi động lại; LED cảnh báo tắt / nháy chậm / nháy nhanh đúng theo mức cảnh báo trong
+  khi LED trạng thái cùng thanh ghi vẫn nháy đều (không ghi đè nhau); thiếu quyền, thiếu I2C, chuỗi GPIO sai
+  đều chỉ cảnh báo và chạy tiếp.
+
+Logic GPIO thanh ghi có unit test riêng chạy trên mọi host (kể cả hai thread cùng đọc-sửa-ghi một thanh ghi),
+được fuzz 1 triệu chuỗi cấu hình dưới ASan/UBSan và kiểm chứng bằng mutation test (mọi lỗi cài vào đều bị test
+bắt). Toàn bộ unit test chạy sạch dưới ThreadSanitizer.
 
 ---
 

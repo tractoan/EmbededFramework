@@ -29,11 +29,19 @@ if(TARGET ep_comm_net)
   target_link_libraries(ep_tests PRIVATE ep_comm_net)
 endif()
 
-# HAL Linux dùng chung (TermiosUart, I2cDev, GpioLine, FileStorage) khi target dùng nó
-if(EP_HAL_COMMON STREQUAL "linux")
+# GPIO thanh ghi (header-only, không phụ thuộc OS) – test trên mọi host
+target_sources(ep_tests PRIVATE test_mmio_gpio.cpp)
+target_include_directories(ep_tests PRIVATE ${PROJECT_SOURCE_DIR}/platform/hal/ports/common)
+
+# HAL dùng chung theo OS (EP_HAL_COMMON của target): posix (UART termios, FileStorage), linux, qnx
+if("posix" IN_LIST EP_HAL_COMMON)
+  target_sources(ep_tests PRIVATE test_posix_hal.cpp)
+endif()
+if("linux" IN_LIST EP_HAL_COMMON)
   target_sources(ep_tests PRIVATE test_linux_hal.cpp)
-  target_include_directories(ep_tests PRIVATE ${PROJECT_SOURCE_DIR}/platform/hal/ports/common)
-  target_link_libraries(ep_tests PRIVATE util)   # openpty (glibc < 2.34)
+endif()
+if("qnx" IN_LIST EP_HAL_COMMON)
+  target_sources(ep_tests PRIVATE test_qnx_hal.cpp)
 endif()
 
 # Kiểm tra chéo CRC_EXTRA/độ dài bản tin C++ (MAVLink v2 + dialect bring-up) với định nghĩa XML (tools/mavlink).

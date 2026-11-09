@@ -8,7 +8,7 @@
 # Chạy với root hoặc `setcap cap_sys_nice+ep firmware` để priority task có hiệu lực (SCHED_FIFO).
 set(EP_OSAL_PORT  posix)
 set(EP_HAL_PORT   linux_cpu)
-set(EP_HAL_COMMON linux)    # StdioUart, FileStorage dùng chung với linux_sim / zynqmp_linux
+set(EP_HAL_COMMON "posix;linux")   # StdioUart, FileStorage (posix) dùng chung với linux_sim / zynqmp_linux
 set(EP_NET_PORT   posix)    # TCP/IP: kênh MAVLink qua UDP cho phần mềm giao diện
 
 find_package(Threads REQUIRED)

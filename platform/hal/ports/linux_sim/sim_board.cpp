@@ -1,7 +1,7 @@
 #include <cstdio>
 #include <cstdlib>
 
-#include "linux/linux_hal.hpp"
+#include "posix/posix_hal.hpp"
 #include "sim_bringup.hpp"
 #include "sim_peripherals.hpp"
 
