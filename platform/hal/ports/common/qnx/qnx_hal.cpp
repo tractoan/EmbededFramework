@@ -7,6 +7,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <cstdio>
 #include <cstring>
 
 namespace hal::host {
@@ -120,7 +121,14 @@ Status MmioGpio::configure(PinMode mode) {
         const std::uint64_t start = spec.base & ~(page - 1u);
         const std::size_t len     = static_cast<std::size_t>(spec.base - start) + spec.span();
         void* p = ::mmap_device_memory(nullptr, len, PROT_READ | PROT_WRITE | PROT_NOCACHE, 0, start);
-        if (p == MAP_FAILED) return errno == EPERM ? Status::Busy : Status::NotFound;   // EPERM: thiếu quyền
+        if (p == MAP_FAILED) {
+            if (errno == EPERM) {   // không có Status riêng cho "thiếu quyền": báo rõ nguyên nhân ở đây
+                std::fputs("[qnx] mmap_device_memory: permission denied (run as root or grant PROCMGR_AID_MEM_PHYS)\n",
+                           stderr);
+                return Status::NotSupported;
+            }
+            return Status::NotFound;   // địa chỉ vật lý không hợp lệ
+        }
         map_     = p;
         map_len_ = len;
         pin_.attach(reinterpret_cast<volatile std::uint32_t*>(static_cast<std::uint8_t*>(p) + (spec.base - start)), spec);

@@ -1,6 +1,7 @@
 // HAL POSIX dùng chung (platform/hal/ports/common/posix): chạy trên mọi target có "posix" trong
 // EP_HAL_COMMON (linux_sim, zynqmp_a53_linux qua qemu-aarch64, qnx trên board QNX).
 #include <fcntl.h>
+#include <termios.h>
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -105,6 +106,69 @@ TEST(posix_termios_uart_over_pty) {
     uart.close();
     CHECK(!uart.is_open());
     ::close(slave);
+    ::close(master);
+}
+
+TEST(posix_termios_uart_applies_line_settings) {
+    const int master = ::posix_openpt(O_RDWR | O_NOCTTY);
+    CHECK(master >= 0);
+    if (master < 0) return;
+    CHECK(::grantpt(master) == 0 && ::unlockpt(master) == 0);
+    const char* pts = ::ptsname(master);
+    if (pts == nullptr) return;
+    char name[128] = {};
+    std::strncpy(name, pts, sizeof(name) - 1);
+    const int probe = ::open(name, O_RDWR | O_NOCTTY);   // đọc lại cấu hình mà TermiosUart đã đặt
+    CHECK(probe >= 0);
+
+    // Pty của Linux luôn ép CS8 + không parity (drivers/tty/pty.c); UART thật và một số OS thì giữ.
+    // Dò trước: chỉ kiểm tra data bits/parity khi thiết bị giữ được giá trị đã đặt.
+    bool keeps_framing = false;
+    {
+        termios t{};
+        if (probe >= 0 && ::tcgetattr(probe, &t) == 0) {
+            t.c_cflag = (t.c_cflag & ~static_cast<tcflag_t>(CSIZE | PARODD)) | CS7 | PARENB;
+            ::tcsetattr(probe, TCSANOW, &t);
+            keeps_framing = ::tcgetattr(probe, &t) == 0 && (t.c_cflag & CSIZE) == CS7 && (t.c_cflag & PARENB) != 0;
+        }
+    }
+
+    hal::host::TermiosUart uart(name);
+    hal::UartConfig cfg{};
+    cfg.baudrate  = 9600;
+    cfg.data_bits = 7;
+    cfg.parity    = hal::UartConfig::Parity::Even;
+    cfg.stop_bits = 2;
+    CHECK(core::is_ok(uart.open(cfg)));
+    termios t{};
+    CHECK(::tcgetattr(probe, &t) == 0);
+    CHECK(::cfgetospeed(&t) == B9600 && ::cfgetispeed(&t) == B9600);
+    if (keeps_framing) {
+        CHECK((t.c_cflag & CSIZE) == CS7);
+        CHECK((t.c_cflag & PARENB) != 0 && (t.c_cflag & PARODD) == 0);
+    }
+    CHECK((t.c_cflag & CSTOPB) != 0);
+    CHECK((t.c_cflag & (CLOCAL | CREAD)) == (CLOCAL | CREAD));
+    // raw mode: không canonical/echo/tín hiệu, không dịch CR/LF, không xử lý đầu ra, không XON/XOFF
+    CHECK((t.c_lflag & (ICANON | ECHO | ISIG | IEXTEN)) == 0);
+    CHECK((t.c_iflag & (ICRNL | INLCR | IGNCR | IXON | ISTRIP)) == 0);
+    CHECK((t.c_oflag & OPOST) == 0);
+
+    cfg.baudrate  = 115200;
+    cfg.data_bits = 8;
+    cfg.parity    = hal::UartConfig::Parity::Odd;
+    cfg.stop_bits = 1;
+    CHECK(core::is_ok(uart.open(cfg)));   // mở lại: cấu hình mới thay hoàn toàn cấu hình cũ
+    CHECK(::tcgetattr(probe, &t) == 0);
+    CHECK(::cfgetospeed(&t) == B115200);
+    CHECK((t.c_cflag & CSIZE) == CS8);
+    if (keeps_framing) CHECK((t.c_cflag & (PARENB | PARODD)) == (PARENB | PARODD));
+    CHECK((t.c_cflag & CSTOPB) == 0);
+
+    cfg.data_bits = 9;
+    CHECK(uart.open(cfg) == core::Status::InvalidArg);
+    uart.close();
+    if (probe >= 0) ::close(probe);
     ::close(master);
 }
 

@@ -1,5 +1,7 @@
 // GPIO thanh ghi (common/mmio): logic thuần, chạy trên mọi host với "thanh ghi" là mảng thường.
+#include <atomic>
 #include <cstdint>
+#include <thread>
 
 #include "mmio/mmio_gpio.hpp"
 #include "test_framework.hpp"
@@ -88,4 +90,44 @@ TEST(mmio_gpio_inverted_dir_set_clr_active_low) {
     CHECK(pin.read());
     CHECK(core::is_ok(pin.configure(hal::PinMode::Input)));
     CHECK_EQ(regs[0x134 / 4], 0xFFFFFFFFu);
+}
+
+// Hai chân (hai thread) cùng đọc-sửa-ghi MỘT thanh ghi: không được mất cập nhật của nhau.
+// Mỗi vòng: cả hai bit đang 0, hai thread đồng thời bật bit của mình -> cuối vòng phải có cả hai.
+TEST(mmio_gpio_concurrent_rmw_keeps_both_updates) {
+    static volatile std::uint32_t regs[2] = {};
+    GpioSpec a_spec, b_spec;
+    CHECK(parse_gpio_spec("base=0x1000,out=0x0,dir=0x4,bit=3", a_spec));
+    CHECK(parse_gpio_spec("base=0x1000,out=0x0,dir=0x4,bit=4", b_spec));
+    hal::mmio::GpioPin a, b;
+    a.attach(regs, a_spec);
+    b.attach(regs, b_spec);
+
+    constexpr int kRounds = 20000;
+    std::atomic<int> round{0};   // thread chính tăng để thả hai worker vào vòng mới
+    std::atomic<int> done{0};    // số worker đã ghi xong trong vòng hiện tại
+    std::atomic<int> lost{0};
+    auto worker = [&](hal::mmio::GpioPin& pin) {
+        for (int r = 1; r <= kRounds; ++r) {
+            while (round.load() < r) {
+            }
+            pin.write(true);
+            done.fetch_add(1);
+        }
+    };
+    std::thread ta(worker, std::ref(a));
+    std::thread tb(worker, std::ref(b));
+    for (int r = 1; r <= kRounds; ++r) {
+        a.write(false);   // worker đang chờ vòng r: chỉ thread chính chạm thanh ghi
+        b.write(false);
+        done.store(0);
+        round.store(r);   // thả cả hai cùng lúc
+        while (done.load() < 2) {
+        }
+        if (!a.read() || !b.read()) lost.fetch_add(1);
+    }
+    ta.join();
+    tb.join();
+    CHECK_EQ(lost.load(), 0);
+    CHECK_EQ(regs[0] & 0x18u, 0x18u);
 }
