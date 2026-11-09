@@ -34,7 +34,9 @@ TEST(osal_thread_consumes_queue) {
     osal::Queue<int, 4> q;
     Worker w{&q};
     osal::Thread t;
-    CHECK(core::is_ok(t.start(osal::ThreadConfig{"worker"}, &osal::Thread::invoke<Worker, &Worker::run>, &w)));
+    const bool started = core::is_ok(t.start(osal::ThreadConfig{"worker"}, &osal::Thread::invoke<Worker, &Worker::run>, &w));
+    CHECK(started);
+    if (!started) return;   // không có consumer: send() sẽ chặn mãi
     for (int i = 1; i <= 100; ++i) q.send(i);
     q.send(-1);   // poison pill
     t.join();

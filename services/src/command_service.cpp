@@ -54,10 +54,13 @@ void CommandService::print_help(CommandOutput& out) const {
 int CommandService::execute(char* line, CommandOutput& out) {
     char* argv[core::cfg::kCliMaxArgs] = {};
     int argc = 0;
-    char* save = nullptr;
-    for (char* tok = strtok_r(line, " \t", &save); tok != nullptr && argc < static_cast<int>(core::cfg::kCliMaxArgs);
-         tok = strtok_r(nullptr, " \t", &save)) {
-        argv[argc++] = tok;
+    // Tách token tại chỗ (không dùng strtok_r: không có trong newlib khi build ISO C++ thuần).
+    for (char* p = line; *p != '\0' && argc < static_cast<int>(core::cfg::kCliMaxArgs);) {
+        while (*p == ' ' || *p == '\t') ++p;
+        if (*p == '\0') break;
+        argv[argc++] = p;
+        while (*p != '\0' && *p != ' ' && *p != '\t') ++p;
+        if (*p != '\0') *p++ = '\0';
     }
     if (argc == 0) return 0;
 
