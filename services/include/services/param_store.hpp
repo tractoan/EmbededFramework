@@ -61,7 +61,8 @@ private:
     std::size_t count_          = 0;
     hal::INvStorage* storage_   = nullptr;
     msg::EventBus* bus_         = nullptr;
-    mutable osal::Mutex mtx_;
+    mutable osal::Mutex mtx_;   // bảo vệ entries_/count_
+    osal::Mutex nv_mtx_;        // tuần tự hóa save/load: CLI và Modbus có thể cùng lưu (thứ tự khóa: nv_mtx_ -> mtx_)
 };
 
 }  // namespace svc

@@ -38,6 +38,10 @@ std::uint32_t heap_violations();
 
 // Chỉ dùng trong unit test: quay lại giai đoạn khởi động.
 void reset_startup_for_test();
+// Chỉ dùng trong unit test: trả pool stack về mức `used` đã ghi trước đó (stack_pool_stats().used),
+// để mỗi test có pool như lúc khởi động bất kể cấu hình sản phẩm. Chỉ gọi khi không còn thread nào
+// đang chạy trên stack cấp sau mốc đó.
+void release_stack_pool_for_test(std::size_t used_mark);
 
 // ---------------------------------------------------- danh sách thread đang chạy
 struct ThreadInfo {
