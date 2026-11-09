@@ -12,15 +12,17 @@
 
 namespace app {
 
-class SerialBringup final : public IModule, public svc::ICommandHandler {
+class SerialBringup final : public IModule, public svc::ICommandHandler, private IWorkerHandler {
 public:
     struct Config {
         svc::ISerialPorts* ports = nullptr;
         int gcs_port             = -1;   // -1: không có
         int gnss_port            = -1;   // -1: không có
+        // Thread ghi lệnh tới máy thu GNSS (ghi UART có thể chặn). Ghi đè được bằng ModuleManager::add(.., &task).
+        osal::ThreadConfig gnss_tx_task{"gnss_tx", osal::Priority::Normal, 2048, nullptr};
     };
 
-    explicit SerialBringup(const Config& cfg) : cfg_(cfg) {}
+    explicit SerialBringup(const Config& cfg) : cfg_(cfg), worker_(*this, cfg.gnss_tx_task) {}
 
     const char* name() const override { return "serial_bringup"; }
     core::Status on_init(SystemContext& ctx) override;
@@ -31,6 +33,7 @@ public:
     void on_tick(std::uint64_t now_ms) override;
 
     int on_command(int argc, char** argv, svc::CommandOutput& out) override;   // "serial", "gnss"
+    ModuleWorkerBase* worker() override { return &worker_; }
 
     bringup::GnssState gnss_state() const { return gnss_state_; }
 
@@ -62,6 +65,10 @@ private:
         {params::kGnssForward, "gnss.forward", 1, 0, 1, "0/1"},
         {params::kGnssBaud, "gnss.baud", 115200, 1200, 921600, "bps"},
     };
+
+    void on_job(const msg::Event& job) override;   // thread worker: ghi lệnh/đổi baud cổng GNSS
+
+    ModuleWorker<8> worker_;   // khai báo CUỐI: hủy đầu tiên -> thread dừng trước dữ liệu nó dùng
 };
 
 }  // namespace app

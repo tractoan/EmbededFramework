@@ -118,7 +118,9 @@ core::Status setup_modules(app::ModuleManager& modules) {
     static device::IImu* const imus[hw::kImuCount] = {&g_imu[0], &g_imu[1]};
     static app::ImuBringup imu(imus, hw::kImuCount);
 
-    core::Status st = modules.add(&serial);
+    // Worker ghi lệnh GNSS: cùng mức ưu tiên với cổng GNSS (lệnh cấu hình không bị các cổng loopback chặn).
+    static const osal::ThreadConfig gnss_tx{"gnss_tx", kGnssPortPriority, 2048, nullptr};
+    core::Status st = modules.add(&serial, &gnss_tx);
     if (core::is_ok(st)) st = modules.add(&io);
     if (core::is_ok(st)) st = modules.add(&imu);
     return st;

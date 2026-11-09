@@ -6,7 +6,8 @@
 #define EP_CFG_MAX_PARAMS 48
 #define EP_CFG_MAX_COMMANDS 24
 #define EP_CFG_COMM_MAX_CHANNELS 4
-// Task: console 4K + gcs 4K + gcs_udp 4K + app 4K + led 1K + 11 cổng serial x 2K + 2 IMU x 3K = 45 KB (+ dự phòng)
+// Task: console 4K + gcs 4K + gcs_udp 4K + app 4K + led 1K + 11 cổng serial x 2K + gnss_tx 2K + 2 IMU x 3K
+//       = 47 KB (+ dự phòng)
 #define EP_CFG_STACK_POOL_BYTES (56u * 1024u)
 #define EP_CFG_MAX_THREADS 24
 #define EP_CFG_LOG_LEVEL 1

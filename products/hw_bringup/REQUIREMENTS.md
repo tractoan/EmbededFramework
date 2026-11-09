@@ -156,6 +156,7 @@
 | 2026-11-06 | | Nâng cấp theo framework mới (nhánh main): cấu trúc platform/communication/app.business, target `linux_cpu`, Event + Buffer, CON-06, CON-07. |
 | 2026-11-09 | | Nâng cấp theo main mới: lớp messaging (`msg::`), MAVLink v2 tách thành `communication/mavlink2` (song song MAVLink v1 của framework), HAL Linux dùng chung, priority SCHED_FIFO trên `linux_cpu`, MAV-12 (UDP). |
 | 2026-11-09 | | Cập nhật theo main (QNX): HAL dùng chung tách `common/posix` + `common/linux`, `linux_cpu` dùng `EP_HAL_COMMON="posix;linux"`. Không đổi yêu cầu. |
+| 2026-11-09 | | Cập nhật theo main (ModuleWorker): ghi lệnh GNSS chuyển sang worker `gnss_tx` riêng của `SerialBringup`. Không đổi yêu cầu. |
 | | | |
 
 ---

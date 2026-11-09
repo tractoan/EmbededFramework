@@ -159,7 +159,7 @@ EmbededFramework/
 │   ├── mavlink/                # mavlink_v1 (codec), mavlink_map, mavlink_protocol (ep_proto_mavlink)
 │   └── mavlink2/               # codec v2, common, mavlink_protocol + IDialect     (ep_proto_mavlink2)
 ├── app/
-│   ├── runtime/include/app/    # module, module_manager, state_machine, system, product
+│   ├── runtime/include/app/    # module, module_manager, module_worker, state_machine, system, product
 │   └── business/               # module nghiệp vụ tái sử dụng + app_events.hpp, app_params.hpp
 ├── products/
 │   ├── thermo_pro/             # 3 module, latch, StatsReporter; CLI/Modbus/MAVLink qua UART, TCP, UDP
@@ -190,10 +190,18 @@ EmbededFramework/
                     ┌───────── ModuleManager: thread "app" ─────────┐
                     │ Queue<Event,N> ─► on_event() mọi module       │
                     │ lịch tick      ─► on_tick() đúng chu kỳ       │
+                    └──────────────────────┬────────────────────────┘
+                                           │ worker_.post(Event)   (tùy chọn, từng module)
+                                           ▼
+                    ┌──── ModuleWorker: thread riêng của module ────┐
+                    │ Queue<Event,Depth> ─► on_job()                │
+                    │ lịch không trôi    ─► on_worker_tick()        │──► publish(Event) kết quả
                     └───────────────────────────────────────────────┘
 ```
 
 - **Toàn bộ nghiệp vụ chạy trên 1 thread** (Active Object) → module **không cần mutex**, hành vi xác định, dễ test.
+- Module có việc chậm/chặn (ghi Flash, tính toán nặng, I/O đồng bộ) hoặc cần priority/chu kỳ riêng có thể
+  **thêm một thread riêng** (`app::ModuleWorker`, xem 6.1) – không làm đứng các module khác.
 - Mỗi kênh truyền thông có một thread RX riêng; LED có thread riêng. Dữ liệu chia sẻ sang thread khác dùng `std::atomic` hoặc đi qua event.
 - Handler lệnh / giao thức chạy trên thread của kênh ⇒ **không sửa trạng thái module trực tiếp**, mà publish event yêu cầu
   (ví dụ `alarm ack` hoặc coil Modbus 0 → `kAlarmAckRequest`).
@@ -483,6 +491,42 @@ private:
 2. Thêm file `.cpp` vào target `ep_business` (hoặc giữ trong `products/<p>/` nếu chỉ một sản phẩm dùng).
 3. `s.modules.add(&pump)` trong `product::setup()`.
 4. Viết unit test như `tests/test_alarm_controller.cpp` – đưa event vào, kiểm tra kết quả, không cần phần cứng.
+
+#### Module có thread riêng (`app::ModuleWorker`)
+
+Khi một phần nghiệp vụ chậm hoặc cần priority khác, module **sở hữu** một worker: hàng đợi tĩnh + thread
+(stack lấy từ pool lúc khởi động). `ModuleManager` khởi động worker sau `on_start()` của mọi module và dừng
+nó **trước** `on_stop()`.
+
+```cpp
+class DataLogger final : public app::IModule, private app::IWorkerHandler {
+public:
+    app::ModuleWorkerBase* worker() override { return &worker_; }
+    void on_event(const msg::Event& e) override {               // thread "app": chỉ chuyển việc
+        if (e.id == app::events::kTemperatureBatch) worker_.post(e);   // Buffer: không copy dữ liệu
+    }
+private:
+    void on_job(const msg::Event& job) override { /* ghi Flash – được phép chậm */ }
+    std::uint32_t worker_period_ms() const override { return 60000; }   // 0 = không tick
+    void on_worker_tick(std::uint64_t now) override { /* flush định kỳ */ }
+    /* ...dữ liệu do worker sở hữu... */
+    app::ModuleWorker<8> worker_{*this, {"logger", osal::Priority::Low, 2048, nullptr}};   // khai báo CUỐI
+};
+```
+
+| Callback | Thread |
+|---|---|
+| `on_init`, `on_start`, `on_stop` | "app" – worker chưa / không còn chạy |
+| `on_event`, `on_tick` | "app" (chung, tuần tự) |
+| `on_job`, `on_worker_tick` | worker riêng của module |
+| `on_command` | thread của kênh nhận lệnh |
+
+Quy tắc: dữ liệu do worker sở hữu chỉ chạm trên worker; hai phía trao đổi bằng `worker_.post()` (app → worker),
+`bus.publish()` (worker → app/module khác) hoặc `std::atomic` cho cấu hình đơn giản (vd. chu kỳ).
+`on_worker_tick` có lịch **không trôi** (mốc kế tiếp = mốc trước + chu kỳ; trễ quá một chu kỳ thì bỏ lần lỡ).
+`post()` trả `false` khi hàng đợi đầy (đếm trong `sys modules`). Sản phẩm ghi đè priority/stack của worker:
+`s.modules.add(&logger, &cfg)`; nhớ cộng stack worker vào `EP_CFG_STACK_POOL_BYTES` và số thread vào
+`EP_CFG_MAX_THREADS`. Ví dụ thật: `products/thermo_pro/stats_reporter.hpp`.
 
 ### 6.2 Thêm sản phẩm mới
 

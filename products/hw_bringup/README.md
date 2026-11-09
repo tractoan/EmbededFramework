@@ -36,8 +36,8 @@ Luồng: thread cổng/IMU → service (atomic, ring buffer) → module (thread 
   `Event::buffer` lấy từ **pool tĩnh** khai báo ở `setup_buffers()` (64 B×32, 128 B×64, 256 B×16, 1024 B×16);
   payload inline giữ mặc định 16 B. Hết pool → gói đó bị bỏ và được đếm (`sys buffers`, `gnss`).
   Bộ đệm của phần cứng mô phỏng và port `linux_cpu` cũng là mảng cố định.
-- **Stack**: 18 task lấy stack từ vùng tĩnh `EP_CFG_STACK_POOL_BYTES` = 56 KB (dùng ~45 KB), `EP_CFG_MAX_THREADS` = 24.
-- **Priority** (0..15, `product.cpp`): IMU 12 · cổng GNSS 10 · kênh giao diện (serial + UDP) 9 · nghiệp vụ `app` 8 · cổng loopback 5 ·
+- **Stack**: 19 task lấy stack từ vùng tĩnh `EP_CFG_STACK_POOL_BYTES` = 56 KB (dùng ~47 KB), `EP_CFG_MAX_THREADS` = 24.
+- **Priority** (0..15, `product.cpp`): IMU 12 · cổng GNSS + worker `gnss_tx` 10 · kênh giao diện (serial + UDP) 9 · nghiệp vụ `app` 8 · cổng loopback 5 ·
   console 4 · LED 4. Xem lúc chạy: `sys tasks`. Trên target `linux_cpu` priority là SCHED_FIFO thật
   (`EP_POSIX_REALTIME`; cần root hoặc `setcap cap_sys_nice+ep firmware`, không có quyền thì chạy SCHED_OTHER).
 
@@ -64,7 +64,9 @@ bằng `mavgen` (C#, C++, Python...). System/component của firmware: 1/1; hear
 | ↓↑ | `PARAM_REQUEST_LIST/READ`, `PARAM_SET` → `PARAM_VALUE` | tham số (kiểu INT32, mã hóa C-cast) |
 | ↓ | `COMMAND_LONG` `MAV_CMD_PREFLIGHT_STORAGE` | param1: 0 đọc NV, 1 lưu NV, 2 mặc định |
 
-Lệnh GNSS chỉ được gửi khi máy thu ở trạng thái CONNECTED (ngược lại: bỏ và báo `STATUSTEXT`).
+Lệnh GNSS chỉ được gửi khi máy thu ở trạng thái CONNECTED (ngược lại: bỏ và báo `STATUSTEXT`). Việc ghi UART/đổi
+baudrate chạy trên worker riêng `gnss_tx` của `SerialBringup` (`app::ModuleWorker`, hàng đợi 8 lệnh) để thread
+nghiệp vụ chung không bị chặn; xem `sys modules` (jobs/dropped).
 
 ### Tham số
 

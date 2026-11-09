@@ -179,7 +179,11 @@ TEST(serial_bringup_gnss_connected_forwards_data_and_commands) {
     m.on_tick(t0 + 9000);                          // đã kết nối: không bao giờ chuyển sang loopback
     CHECK(m.gnss_state() == bu::GnssState::Connected);
 
+    // Lệnh GNSS được ghi trên worker "gnss_tx" của module (ghi UART có thể chặn), không trên thread ứng dụng.
+    CHECK(m.worker() != nullptr && core::is_ok(m.worker()->start()));
     m.on_event(msg::Event::make(bu::kGnssTxRequest, bu::GnssTxHeader{38400}, msg::Buffer::copy_of("CFG\r\n", 5)));
+    CHECK(mock::wait_until([&] { return m.worker()->processed() >= 1; }));
+    m.worker()->stop();   // join: kết quả ghi của worker thấy được từ thread test
     CHECK(ports.tx[1] == "CFG\r\n" && ports.st[1].baudrate == 38400);
 
     // CLI "gnss send ..." -> event yêu cầu (thread kênh không ghi trực tiếp)

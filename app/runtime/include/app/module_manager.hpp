@@ -12,9 +12,11 @@ namespace app {
 //  - Nhận MỌI event từ EventBus (từ bất kỳ thread/service nào) -> đưa vào queue riêng.
 //  - Một thread duy nhất lấy event ra, phân phối tới các module, và gọi on_tick đúng chu kỳ.
 // => Nghiệp vụ chạy tuần tự, xác định, không race condition.
+//  - Module cần thread riêng (IModule::worker()) được khởi động/dừng cùng vòng đời này.
 class ModuleManager final : public msg::IEventListener, private core::NonCopyable {
 public:
-    core::Status add(IModule* module);
+    // worker_task: (tùy chọn) priority/stack cho thread riêng của module, ghi đè cấu hình mặc định của module.
+    core::Status add(IModule* module, const osal::ThreadConfig* worker_task = nullptr);
     core::Status init_all(SystemContext& ctx);
     // task: priority/stack của thread nghiệp vụ (stack_mem == nullptr -> lấy từ vùng stack tĩnh)
     core::Status start(const osal::ThreadConfig& task = osal::ThreadConfig{"app", osal::Priority::Normal, 4096, nullptr});
@@ -35,7 +37,9 @@ private:
     struct Slot {
         IModule* module         = nullptr;
         std::uint64_t next_tick = 0;
+        osal::ThreadConfig worker_task{nullptr};   // name == nullptr: dùng cấu hình của module
     };
+    void stop_workers();
     std::array<Slot, core::cfg::kMaxModules> slots_{};
     std::size_t count_ = 0;
     osal::Queue<msg::Event, core::cfg::kAppQueueDepth> queue_;

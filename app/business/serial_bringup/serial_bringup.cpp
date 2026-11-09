@@ -181,16 +181,22 @@ void SerialBringup::on_event(const msg::Event& e) {
             bringup::notify(*ctx_, kTag, Severity::Warning, "GNSS: not connected, command dropped");
             return;
         }
-        const auto g = static_cast<std::size_t>(cfg_.gnss_port);
-        if (req.baudrate != 0) {
-            if (core::is_ok(cfg_.ports->set_baudrate(g, req.baudrate))) {
-                bringup::notify(*ctx_, kTag, Severity::Notice, "GNSS: port baudrate -> %lu", static_cast<unsigned long>(req.baudrate));
-            }
-        }
-        const std::size_t n = e.buffer.size();
-        if (n > 0 && cfg_.ports->write(g, e.buffer.data(), n) != n) {
-            bringup::notify(*ctx_, kTag, Severity::Error, "GNSS: write failed");
-        }
+        // Ghi UART có thể chặn (tới 100 ms) -> làm trên worker "gnss_tx", không giữ thread ứng dụng chung.
+        // Buffer chỉ tăng tham chiếu. Hàng đợi đầy -> bỏ lệnh và báo.
+        if (!worker_.post(e)) bringup::notify(*ctx_, kTag, Severity::Warning, "GNSS: tx queue full, command dropped");
+    }
+}
+
+void SerialBringup::on_job(const msg::Event& job) {   // thread worker "gnss_tx"
+    bringup::GnssTxHeader req{};
+    if (job.id != bringup::kGnssTxRequest || !job.get(req) || cfg_.gnss_port < 0) return;
+    const auto g = static_cast<std::size_t>(cfg_.gnss_port);
+    if (req.baudrate != 0 && core::is_ok(cfg_.ports->set_baudrate(g, req.baudrate))) {
+        bringup::notify(*ctx_, kTag, Severity::Notice, "GNSS: port baudrate -> %lu", static_cast<unsigned long>(req.baudrate));
+    }
+    const std::size_t n = job.buffer.size();
+    if (n > 0 && cfg_.ports->write(g, job.buffer.data(), n) != n) {
+        bringup::notify(*ctx_, kTag, Severity::Error, "GNSS: write failed");
     }
 }
 

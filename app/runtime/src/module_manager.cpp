@@ -9,10 +9,13 @@ namespace {
 constexpr const char* kTag = "modules";
 }
 
-core::Status ModuleManager::add(IModule* module) {
+core::Status ModuleManager::add(IModule* module, const osal::ThreadConfig* worker_task) {
     if (module == nullptr) return core::Status::InvalidArg;
     if (count_ >= slots_.size()) return core::Status::NoMemory;
-    slots_[count_++].module = module;
+    if (worker_task != nullptr && module->worker() == nullptr) return core::Status::InvalidArg;   // module không có worker
+    Slot& s  = slots_[count_++];
+    s.module = module;
+    if (worker_task != nullptr) s.worker_task = *worker_task;
     return core::Status::Ok;
 }
 
@@ -39,17 +42,40 @@ core::Status ModuleManager::start(const osal::ThreadConfig& task) {
         }
         slots_[i].next_tick = now + slots_[i].module->tick_period_ms();
     }
+    // Worker chạy trước thread ứng dụng: việc post từ on_event đầu tiên đã có người nhận.
+    for (std::size_t i = 0; i < count_; ++i) {
+        ModuleWorkerBase* w = slots_[i].module->worker();
+        if (w == nullptr) continue;
+        const core::Status st = w->start(&slots_[i].worker_task);
+        if (!core::is_ok(st)) {
+            LOGE(kTag, "worker of '%s' failed to start: %s", slots_[i].module->name(), core::to_string(st));
+            stop_workers();
+            return st;
+        }
+        LOGD(kTag, "worker '%s' of '%s' started", w->config().name, slots_[i].module->name());
+    }
     running_ = true;
     LOGI(kTag, "%u module(s) running", static_cast<unsigned>(count_));
-    return thread_.start(task,
-                         &osal::Thread::invoke<ModuleManager, &ModuleManager::run>, this);
+    const core::Status st = thread_.start(task, &osal::Thread::invoke<ModuleManager, &ModuleManager::run>, this);
+    if (!core::is_ok(st)) {
+        running_ = false;
+        stop_workers();
+    }
+    return st;
 }
 
 void ModuleManager::stop() {
     if (ctx_ != nullptr) ctx_->bus.unsubscribe(msg::evt::kAny, this);
     running_ = false;
-    thread_.join();
+    thread_.join();   // dừng thread ứng dụng trước: không còn ai post việc mới cho worker
+    stop_workers();   // rồi worker: on_stop() chạy khi module không còn thread nào khác
     for (std::size_t i = count_; i-- > 0;) slots_[i].module->on_stop();
+}
+
+void ModuleManager::stop_workers() {
+    for (std::size_t i = count_; i-- > 0;) {
+        if (ModuleWorkerBase* w = slots_[i].module->worker()) w->stop();
+    }
 }
 
 void ModuleManager::on_event(const msg::Event& e) {
