@@ -4,10 +4,12 @@
 //  - 1 cổng cho máy thu GNSS: trong gnss.detect_ms (mặc định 5 s) sau khởi động nếu không nhận
 //    được byte nào -> coi như không có máy thu, chuyển cổng sang kiểm tra loopback.
 //    Có máy thu: chuyển tiếp dữ liệu lên giao diện (kGnssRxData), nhận lệnh cấu hình (kGnssTxRequest).
+//    Dữ liệu máy thu được giải mã NMEA (GGA/RMC) -> kGnssFix (giờ/ngày UTC, lat, lon, độ cao, số vệ tinh).
 //  - Các cổng còn lại: kiểm tra loopback liên tục, báo kLoopbackStatus.
 #include "app/module.hpp"
 #include "app_params.hpp"
 #include "bringup_events.hpp"
+#include "device/nmea.hpp"
 #include "services/serial_port_bank.hpp"
 
 namespace app {
@@ -42,6 +44,7 @@ private:
     void update_gnss(std::uint64_t now_ms);
     void publish_loopback();
     void publish_status(std::uint64_t now_ms);
+    void on_nmea(const device::GnssFix& fix, device::NmeaParser::Result kind, std::uint64_t now_ms);
     bringup::SerialRole role(std::size_t port) const;
 
     Config cfg_;
@@ -49,6 +52,13 @@ private:
     std::uint32_t detect_ms_ = 5000, report_ms_ = 500;
     std::atomic<bool> forward_{true};
     std::atomic<std::uint32_t> gnss_dropped_{0};   // gói GNSS bỏ do hết pool buffer
+
+    // Giải mã NMEA (thread ứng dụng). Bản sao fix cuối dạng atomic cho lệnh CLI "gnss" (thread kênh).
+    device::NmeaParser nmea_;
+    std::uint64_t last_gga_ms_ = 0;
+    std::atomic<std::uint32_t> fix_time_ms_{0}, fix_count_{0}, nmea_errors_{0};
+    std::atomic<std::int32_t> fix_lat_{0}, fix_lon_{0};
+    std::atomic<std::uint8_t> fix_flags_{0}, fix_sats_{0}, fix_quality_{0};
     std::uint64_t start_ms_ = 0, next_report_ = 0, next_status_ = 0;
     // atomic: CLI (thread kênh) đọc
     std::atomic<bringup::GnssState> gnss_state_{bringup::GnssState::Detecting};

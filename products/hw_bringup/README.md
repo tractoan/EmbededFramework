@@ -20,7 +20,7 @@ Firmware chạy trên **CPU nhúng (Linux)** để kiểm tra bo mạch, báo k�
  communication/mavlink2 Mavlink2Protocol: khung v2 (+nhận v1), heartbeat, PARAM_* <-> ParamStore, COMMAND_LONG/ACK, IDialect
  communication/net     UdpStream: kênh MAVLink thứ hai qua mạng (khi target có TCP/IP)
  services              SerialPortBank (thread/cổng: Loopback|Stream|External) · HdlcImu (thread đọc khung)
- platform/device       GpioInput/OutputBank (DI/DO) · ImuFormat + decode_imu_frame (giải mã theo bảng)
+ platform/device       GpioInput/OutputBank (DI/DO) · ImuFormat + decode_imu_frame (giải mã theo bảng) · NmeaParser (GGA/RMC)
  platform/hal          IBoard::serial(i) / digital_input(i) / digital_output(i) / hdlc(i) · IHdlcPort
    ports/linux_cpu     termios(+RS485) · GPIO chardev v2 · SyncLink/N_HDLC/chardev/AF_PACKET · file NV
    ports/linux_sim     12 serial (UDP/loopback/GNSS giả lập) · DI nối vòng DO · 2 IMU giả lập
@@ -56,7 +56,9 @@ bằng `mavgen` (C#, C++, Python...). System/component của firmware: 1/1; hear
 | ↑ | `SERIAL_LOOPBACK_STATUS` (62001) `ser.report_ms` | `ok_mask`, `tested_mask`, vai trò + kết quả + số lần pass/fail từng cổng |
 | ↑ | `IO_STATUS` (62002) | `input_mask`, `output_mask` (khi input đổi, sau mỗi lệnh output, định kỳ) |
 | ↑ | `IMU_DATA` (62004) `imu.rate_hz` | gyro rad/s, accel m/s², tần số, số khung/lỗi, cờ, 48 byte khung thô |
-| ↑ | `SERIAL_CONTROL` (device=GPS1, flags=REPLY) | dữ liệu từ máy thu GNSS (tắt bằng `gnss.forward=0`) |
+| ↑ | `GNSS_FIX` (62005), mỗi chu kỳ đo | firmware giải mã NMEA: giờ UTC trong ngày + ngày (+ thời gian UNIX), lat/lon (degE7), độ cao, HDOP, tốc độ, hướng, chất lượng fix, số vệ tinh, cờ hợp lệ |
+| ↑ | `GPS_RAW_INT` (24, chuẩn), cùng lúc | cùng dữ liệu theo bản tin chuẩn (QGroundControl/công cụ MAVLink hiển thị được ngay) |
+| ↑ | `SERIAL_CONTROL` (device=GPS1, flags=REPLY) | dữ liệu thô từ máy thu GNSS (tắt bằng `gnss.forward=0`) |
 | ↑ | `STATUSTEXT` | sự kiện: GNSS phát hiện/vắng, cổng PASS↔FAIL, IMU mất/có dữ liệu |
 | ↓ | `OUTPUT_SET` (62003) | `out = (out & ~mask) \| (value & mask)` → trả `IO_STATUS` |
 | ↓ | `COMMAND_LONG` `MAV_CMD_DO_SET_RELAY` | param1 = kênh output, param2 = 0/1 |
@@ -88,6 +90,18 @@ Kết quả: `PASS`, `TIMEOUT` (không nhận gì), `MISMATCH` (sai/thiếu byte
 - RS232 / RS422 / RS485 4 dây: giắc TX→RX trên chính cổng.
 - RS485 2 dây: spec `/dev/ttyX:rs485-echo` (nhận lại chính dữ liệu phát) hoặc nối chéo từng cặp cổng với
   `kLoopbackPeer` trong `bringup_config.hpp` (cổng chỉ số nhỏ điều khiển cả hai chiều).
+
+## GNSS: giải mã NMEA
+
+`device::NmeaParser` (`platform/device/src/nmea.cpp`, hàm thuần, số nguyên – không cần FPU) nhận từng byte từ cổng
+máy thu, ghép câu `$...*hh`, **bắt buộc đúng checksum**, giải mã **GGA** (giờ, lat/lon, chất lượng fix, số vệ tinh,
+HDOP, độ cao) và **RMC** (giờ, ngày, lat/lon, tốc độ, hướng) của mọi talker (`GP`, `GN`, `GL`, `GA`, `GB`/`BD`).
+Các câu khác bị bỏ qua; dữ liệu nhị phân (UBX…) xen giữa không làm hỏng câu sau.
+
+- Một `GNSS_FIX` + `GPS_RAW_INT` sau mỗi câu GGA (ngày lấy từ RMC gần nhất). Máy thu chỉ phát RMC → gửi sau mỗi RMC.
+- `time_unix_usec` = ngày + giờ UTC (0 tới khi đã nhận RMC có ngày). Cờ `flags`: 1 giờ, 2 ngày, 4 vị trí, 8 độ cao hợp lệ.
+- Giải mã luôn chạy khi máy thu CONNECTED, độc lập với việc chuyển tiếp dữ liệu thô (`gnss.forward`).
+- Xem trên console: `gnss` (số fix, lỗi checksum, giờ UTC, lat/lon); trên PC: `tools/mavlink/bringup_gcs.py gnss-fix`.
 
 ## IMU
 
@@ -148,7 +162,7 @@ Biên dịch chéo ARM64: thêm `-DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64
 Chạy như dịch vụ: `deploy/ep-bringup.service`.
 
 Công cụ `tools/mavlink/bringup_gcs.py` (chỉ cần Python 3; `pyserial` khi dùng cổng COM) cũng là mẫu cho phần mềm giao diện:
-`monitor`, `output <kênh> <0|1>`, `outputs <hex>`, `relay`, `gnss "<lệnh>" [--gnss-baud B]`, `params`, `param-set`, `save`.
+`monitor`, `gnss-fix`, `output <kênh> <0|1>`, `outputs <hex>`, `relay`, `gnss "<lệnh>" [--gnss-baud B]`, `params`, `param-set`, `save`.
 
 ### Lệnh CLI trên console
 

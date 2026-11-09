@@ -90,6 +90,8 @@ void SerialBringup::update_gnss(std::uint64_t now_ms) {
         std::uint8_t chunk[bringup::kGnssChunkMax];
         const std::size_t n = cfg_.ports->read(g, chunk, sizeof(chunk));
         if (n == 0) break;
+        nmea_.feed(chunk, n, [&](const device::GnssFix& fix, device::NmeaParser::Result kind) { on_nmea(fix, kind, now_ms); });
+        nmea_errors_ = nmea_.checksum_errors();
         if (!forward_) continue;
         msg::Buffer buf = msg::Buffer::copy_of(chunk, n);
         if (!buf) {   // hết pool: bỏ gói này (xem "sys buffers")
@@ -99,6 +101,24 @@ void SerialBringup::update_gnss(std::uint64_t now_ms) {
         ctx_->bus.publish(msg::Event::make(bringup::kGnssRxData, bringup::GnssDataHeader{static_cast<std::uint16_t>(n)},
                                            std::move(buf)));
     }
+}
+
+// Một fix mỗi chu kỳ đo của máy thu: phát sau câu GGA (vị trí/độ cao/vệ tinh, ngày lấy từ RMC trước đó).
+// Máy thu chỉ phát RMC (không GGA trong 2 s): phát sau RMC.
+void SerialBringup::on_nmea(const device::GnssFix& fix, device::NmeaParser::Result kind, std::uint64_t now_ms) {
+    if (kind == device::NmeaParser::Result::Gga) {
+        last_gga_ms_ = now_ms;
+    } else if (last_gga_ms_ != 0 && now_ms < last_gga_ms_ + 2000) {
+        return;
+    }
+    fix_time_ms_ = fix.time_ms;
+    fix_lat_     = fix.lat_e7;
+    fix_lon_     = fix.lon_e7;
+    fix_flags_   = fix.flags;
+    fix_sats_    = fix.satellites;
+    fix_quality_ = fix.quality;
+    fix_count_.fetch_add(1);
+    ctx_->bus.publish(bringup::make_record(bringup::kGnssFix, fix));
 }
 
 void SerialBringup::publish_loopback() {
@@ -252,6 +272,21 @@ int SerialBringup::on_command(int argc, char** argv, svc::CommandOutput& out) {
               static_cast<unsigned long>(s.tx_bytes), static_cast<unsigned long>(s.overflow),
               static_cast<unsigned long>(gnss_dropped_.load()),
               static_cast<unsigned long>(s.baudrate), forward_.load() ? 1 : 0);
+    const std::uint8_t fl = fix_flags_.load();
+    const std::uint32_t t  = fix_time_ms_.load();
+    const std::int32_t lat = fix_lat_.load(), lon = fix_lon_.load();
+    out.print("NMEA: %lu fix, %lu checksum errors | UTC %02lu:%02lu:%02lu.%03lu%s | ", static_cast<unsigned long>(fix_count_.load()),
+              static_cast<unsigned long>(nmea_errors_.load()), static_cast<unsigned long>(t / 3600000),
+              static_cast<unsigned long>(t / 60000 % 60), static_cast<unsigned long>(t / 1000 % 60),
+              static_cast<unsigned long>(t % 1000), (fl & device::GnssFix::kTimeValid) ? "" : " (invalid)");
+    if (fl & device::GnssFix::kPositionValid) {
+        out.print("lat %s%ld.%07ld lon %s%ld.%07ld q=%u sats=%u\r\n", lat < 0 ? "-" : "", static_cast<long>((lat < 0 ? -lat : lat) / 10000000),
+                  static_cast<long>((lat < 0 ? -lat : lat) % 10000000), lon < 0 ? "-" : "",
+                  static_cast<long>((lon < 0 ? -lon : lon) / 10000000), static_cast<long>((lon < 0 ? -lon : lon) % 10000000),
+                  static_cast<unsigned>(fix_quality_.load()), static_cast<unsigned>(fix_sats_.load()));
+    } else {
+        out.print("no position fix\r\n");
+    }
     return 0;
 }
 

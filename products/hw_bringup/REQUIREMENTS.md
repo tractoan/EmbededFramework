@@ -63,7 +63,7 @@
 | GNS-05 | GUI đổi được baudrate cổng máy thu. | trường `baudrate` của `SERIAL_CONTROL` | Đã làm |
 | GNS-06 | Chỉ dò máy thu lúc khởi động; cắm máy thu sau 5 s thì phải khởi động lại. | | Đã làm |
 | GNS-07 | _(vd. nhận dạng chặt hơn: chỉ coi là GNSS khi nhận đúng câu NMEA/UBX hợp lệ?)_ | | Chờ |
-| GNS-08 | _(vd. phân tích vị trí/số vệ tinh và gửi `GPS_RAW_INT`?)_ | | Chờ |
+| GNS-08 | Giải mã NMEA của máy thu, gửi **thời gian (UTC), vĩ độ, kinh độ** lên PC. | GGA + RMC, mọi talker, bắt buộc checksum; `GNSS_FIX` (62005) + `GPS_RAW_INT` mỗi chu kỳ đo | Đã làm |
 
 ---
 
@@ -157,6 +157,7 @@
 | 2026-11-09 | | Nâng cấp theo main mới: lớp messaging (`msg::`), MAVLink v2 tách thành `communication/mavlink2` (song song MAVLink v1 của framework), HAL Linux dùng chung, priority SCHED_FIFO trên `linux_cpu`, MAV-12 (UDP). |
 | 2026-11-09 | | Cập nhật theo main (QNX): HAL dùng chung tách `common/posix` + `common/linux`, `linux_cpu` dùng `EP_HAL_COMMON="posix;linux"`. Không đổi yêu cầu. |
 | 2026-11-09 | | Cập nhật theo main (ModuleWorker): ghi lệnh GNSS chuyển sang worker `gnss_tx` riêng của `SerialBringup`. Không đổi yêu cầu. |
+| 2026-11-09 | | GNS-08: giải mã NMEA (GGA/RMC) gửi giờ UTC, lat, lon lên PC qua `GNSS_FIX` + `GPS_RAW_INT`. |
 | | | |
 
 ---

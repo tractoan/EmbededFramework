@@ -38,6 +38,25 @@
       <field type="float" name="param_value"/>
       <field type="uint8_t" name="param_type"/>
     </message>
+    <message id="24" name="GPS_RAW_INT">
+      <field type="uint64_t" name="time_usec"/>
+      <field type="uint8_t" name="fix_type"/>
+      <field type="int32_t" name="lat"/>
+      <field type="int32_t" name="lon"/>
+      <field type="int32_t" name="alt"/>
+      <field type="uint16_t" name="eph"/>
+      <field type="uint16_t" name="epv"/>
+      <field type="uint16_t" name="vel"/>
+      <field type="uint16_t" name="cog"/>
+      <field type="uint8_t" name="satellites_visible"/>
+      <extensions/>
+      <field type="int32_t" name="alt_ellipsoid"/>
+      <field type="uint32_t" name="h_acc"/>
+      <field type="uint32_t" name="v_acc"/>
+      <field type="uint32_t" name="vel_acc"/>
+      <field type="uint32_t" name="hdg_acc"/>
+      <field type="uint16_t" name="yaw"/>
+    </message>
     <message id="76" name="COMMAND_LONG">
       <field type="uint8_t" name="target_system"/>
       <field type="uint8_t" name="target_component"/>

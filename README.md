@@ -134,7 +134,7 @@ EmbededFramework/
 │   │       └── qnx/            # mọi board có BSP QNX: cấu hình thiết bị bằng biến môi trường
 │   ├── net/                    # TCP/IP: include/net/net.hpp, ports/{posix,lwip}
 │   ├── device/
-│   │   └── include/device/     # temperature_sensor, tmp102, digital_io, imu (+ImuFormat)
+│   │   └── include/device/     # temperature_sensor, tmp102, digital_io, imu (+ImuFormat), nmea
 │   └── target/                 # khởi động theo nền tảng đích: target::init / run / stop_requested
 │       ├── include/target/target.hpp
 │       ├── linux_sim/          # tham số dòng lệnh, Ctrl+C, --run-for

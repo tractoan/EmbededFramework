@@ -16,6 +16,7 @@ add_executable(ep_tests
   test_mavlink.cpp
   test_mavlink2.cpp
   test_bringup_services.cpp
+  test_nmea.cpp
   test_bringup_modules.cpp
   ${PROJECT_SOURCE_DIR}/products/hw_bringup/mavlink_dialect.cpp)
 target_include_directories(ep_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

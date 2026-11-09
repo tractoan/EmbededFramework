@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "device/nmea.hpp"
 #include "messaging/event.hpp"
 
 namespace app::bringup {
@@ -24,6 +25,7 @@ inline constexpr EventId kImuSample        = kBase + 5;   // record ImuSample   
 inline constexpr EventId kGnssRxData       = kBase + 6;   // GnssDataHeader + byte         (dữ liệu từ máy thu)
 inline constexpr EventId kGnssTxRequest    = kBase + 7;   // GnssTxHeader + byte           (lệnh cấu hình tới máy thu)
 inline constexpr EventId kStatusText       = kBase + 8;   // StatusHeader + văn bản (không có '\0')
+inline constexpr EventId kGnssFix          = kBase + 9;   // record device::GnssFix (giải mã NMEA: giờ, ngày, lat, lon...)
 
 inline constexpr std::size_t kMaxSerial     = 16;    // ok_mask/tested_mask 16 bit
 inline constexpr std::size_t kGnssChunkMax  = 512;   // byte GNSS tối đa trong một event

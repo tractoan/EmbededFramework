@@ -47,6 +47,43 @@ struct Heartbeat {
     }
 };
 
+// GPS_FIX_TYPE
+enum : std::uint8_t {
+    GPS_FIX_TYPE_NO_GPS = 0, GPS_FIX_TYPE_NO_FIX = 1, GPS_FIX_TYPE_2D_FIX = 2, GPS_FIX_TYPE_3D_FIX = 3,
+    GPS_FIX_TYPE_DGPS = 4, GPS_FIX_TYPE_RTK_FLOAT = 5, GPS_FIX_TYPE_RTK_FIXED = 6,
+};
+
+struct GpsRawInt {
+    static constexpr std::uint32_t kId = 24;
+    static constexpr std::uint8_t kCrcExtra = 24;
+    static constexpr std::size_t kLen = 52;   // gồm extension
+    std::uint64_t time_usec = 0;              // UNIX epoch hoặc thời gian từ khởi động
+    std::int32_t lat = 0, lon = 0, alt = 0;   // degE7, degE7, mm (MSL)
+    std::uint16_t eph = 0xFFFF, epv = 0xFFFF, vel = 0xFFFF, cog = 0xFFFF;   // HDOP x100, VDOP x100, cm/s, cdeg
+    std::uint8_t fix_type = GPS_FIX_TYPE_NO_GPS, satellites_visible = 0xFF;
+    std::int32_t alt_ellipsoid = 0;
+    std::uint32_t h_acc = 0, v_acc = 0, vel_acc = 0, hdg_acc = 0;
+    std::uint16_t yaw = 0;
+    void pack(std::uint8_t* p) const {
+        wire::put_u32(p, 0, static_cast<std::uint32_t>(time_usec));
+        wire::put_u32(p, 4, static_cast<std::uint32_t>(time_usec >> 32));
+        wire::put_i32(p, 8, lat);
+        wire::put_i32(p, 12, lon);
+        wire::put_i32(p, 16, alt);
+        wire::put_u16(p, 20, eph);
+        wire::put_u16(p, 22, epv);
+        wire::put_u16(p, 24, vel);
+        wire::put_u16(p, 26, cog);
+        p[28] = fix_type; p[29] = satellites_visible;
+        wire::put_i32(p, 30, alt_ellipsoid);
+        wire::put_u32(p, 34, h_acc);
+        wire::put_u32(p, 38, v_acc);
+        wire::put_u32(p, 42, vel_acc);
+        wire::put_u32(p, 46, hdg_acc);
+        wire::put_u16(p, 50, yaw);
+    }
+};
+
 struct ParamRequestRead {
     static constexpr std::uint32_t kId = 20;
     static constexpr std::uint8_t kCrcExtra = 214;

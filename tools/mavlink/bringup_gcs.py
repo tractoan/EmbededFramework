@@ -8,7 +8,8 @@ Dùng để thử firmware và làm mẫu cho phần mềm giao diện thật. C
     tools/mavlink/bringup_gcs.py --serial /dev/ttyUSB0 --baud 115200 monitor
 
 Lệnh:
-  monitor [--seconds N]        hiển thị trạng thái loopback, input/output, IMU, GNSS, STATUSTEXT
+  monitor [--seconds N]        hiển thị trạng thái loopback, input/output, IMU, GNSS (giờ UTC, lat, lon), STATUSTEXT
+  gnss-fix [--seconds N]       in mỗi fix GNSS (GNSS_FIX) do firmware giải mã từ NMEA
   output <kênh> <0|1>          đặt một output (OUTPUT_SET)
   outputs <mask hex>           đặt toàn bộ output
   relay <kênh> <0|1>           đặt output bằng COMMAND_LONG(MAV_CMD_DO_SET_RELAY) chuẩn
@@ -100,6 +101,21 @@ def bits(mask, n):
     return ''.join('1' if (mask >> i) & 1 else '0' for i in range(n))
 
 
+def format_fix(m):
+    fl = m['flags']
+    t = m['time_utc_ms']
+    when = ('%04d-%02d-%02d ' % (m['year'], m['month'], m['day'])) if fl & 2 else ''
+    when += '%02d:%02d:%02d.%03d UTC' % (t // 3600000, t // 60000 % 60, t // 1000 % 60, t % 1000) if fl & 1 else 'time ?'
+    if fl & 4:
+        pos = 'lat %.7f lon %.7f' % (m['lat'] / 1e7, m['lon'] / 1e7)
+        if fl & 8:
+            pos += ' alt %.1f m' % (m['alt'] / 1000.0)
+    else:
+        pos = 'no fix'
+    return '%s  %s  q=%d sats=%d hdop=%s' % (when, pos, m['fix_quality'], m['satellites'],
+                                           '%.2f' % (m['hdop'] / 100.0) if m['hdop'] != 0xFFFF else '?')
+
+
 def monitor(gcs, seconds):
     gnss_bytes = 0
     last_print = 0
@@ -138,6 +154,8 @@ def monitor(gcs, seconds):
                     k, d['imu_type'], d['rate_hz'], d['frame_count'], d['error_count'],
                     'OK ' if fl & 1 else ('START-FAILED' if fl & 4 else 'NO-DATA'),
                     ' '.join('%+.4f' % v for v in d['gyro']), ' '.join('%+.3f' % v for v in d['accel'])))
+        if 'GNSS_FIX' in state:
+            print('  GNSS fix: ' + format_fix(state['GNSS_FIX']))
         if 'gnss_tail' in state:
             print('  GNSS> ' + state['gnss_tail'].strip().splitlines()[-1][:72])
 
@@ -157,6 +175,10 @@ def main():
     try:
         if a.cmd == 'monitor':
             monitor(gcs, a.seconds)
+        elif a.cmd == 'gnss-fix':
+            for name, m, _, _ in gcs.messages(a.seconds):
+                if name == 'GNSS_FIX':
+                    print(format_fix(m), flush=True)
         elif a.cmd == 'output':
             bit = 1 << int(a.args[0])
             gcs.send('OUTPUT_SET', mask=bit, value=bit if int(a.args[1]) else 0, target_system=gcs.tsys,

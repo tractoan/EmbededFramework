@@ -193,6 +193,19 @@ TEST(serial_bringup_gnss_connected_forwards_data_and_commands) {
     const msg::Event* q = c.last_event(bu::kGnssTxRequest);
     CHECK(q != nullptr && Ctx::text_of(*q) == "$PCMD,1 2\r\n");
 
+    // NMEA được giải mã -> kGnssFix (một fix mỗi GGA; ngày lấy từ RMC trước đó)
+    ports.incoming(1, "$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A\r\n"
+                      "$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47\r\n");
+    m.on_tick(t0 + 9050);
+    device::GnssFix fix{};
+    CHECK(c.last_record(bu::kGnssFix, fix));
+    CHECK(fix.lat_e7 == 481173000 && fix.lon_e7 == 115166667 && fix.time_ms == 45319000u && fix.year == 1994);
+    CHECK_EQ(c.rec.count(bu::kGnssFix), 2u);   // RMC (chưa thấy GGA nào) + GGA
+    char gl[] = "gnss";
+    CaptureOut fo;
+    c.cli.execute(gl, fo);
+    CHECK(fo.text.find("UTC 12:35:19.000") != std::string::npos && fo.text.find("lat 48.1173000 lon 11.5166667") != std::string::npos);
+
     // gnss.forward = 0 -> không chuyển tiếp
     c.params.set(app::params::kGnssForward, 0);
     for (const auto& e : std::vector<msg::Event>(c.rec.events)) m.on_event(e);
@@ -297,8 +310,26 @@ TEST(bringup_dialect_maps_events_and_messages) {
     pr[11].pass = 9; pr[0].role = 1;
     d.on_event(msg::Event::make(bu::kLoopbackStatus, bu::LoopbackHeader{0xFFFC, 0xFFFF, 16}, msg::Buffer::copy_of(pr, sizeof(pr))), tx);
     d.on_event(msg::Event::make(bu::kStatusText, bu::StatusHeader{bu::Severity::Error}, msg::Buffer::copy_of("boom", 4)), tx);
-    CHECK_EQ(tx.sent.size(), 5u);
-    if (tx.sent.size() == 5) {
+    device::GnssFix gf{};
+    gf.time_ms = 45319000; gf.year = 1994; gf.month = 3; gf.day = 23; gf.lat_e7 = 481173000; gf.lon_e7 = -115166667;
+    gf.alt_mm = 545400; gf.quality = 1; gf.satellites = 8; gf.hdop_x100 = 90;
+    gf.flags = device::GnssFix::kTimeValid | device::GnssFix::kDateValid | device::GnssFix::kPositionValid |
+               device::GnssFix::kAltitudeValid;
+    d.on_event(bu::make_record(bu::kGnssFix, gf), tx);
+    CHECK_EQ(tx.sent.size(), 7u);
+    if (tx.sent.size() == 7) {
+        const auto& g = tx.sent[5].payload;   // GNSS_FIX
+        CHECK_EQ(tx.sent[5].id, 62005u);
+        const std::uint64_t t = mavlink2::wire::get_u32(g.data(), 0) | (std::uint64_t{mavlink2::wire::get_u32(g.data(), 4)} << 32);
+        CHECK_EQ(t, 764426119000000ull);
+        CHECK(mavlink2::wire::get_u32(g.data(), 8) == 45319000u && static_cast<std::int32_t>(mavlink2::wire::get_u32(g.data(), 16)) == -115166667);
+        CHECK(mavlink2::wire::get_u16(g.data(), 24) == 1994 && g[32] == 3 && g[33] == 23 && g[35] == 8 && g[36] == 15);
+        const auto& r = tx.sent[6].payload;   // GPS_RAW_INT
+        CHECK(tx.sent[6].id == mavlink2::GpsRawInt::kId && r[28] == mavlink2::GPS_FIX_TYPE_3D_FIX && r[29] == 8);
+        CHECK(static_cast<std::int32_t>(mavlink2::wire::get_u32(r.data(), 8)) == 481173000 && mavlink2::wire::get_u16(r.data(), 20) == 90);
+    }
+
+    if (tx.sent.size() >= 5) {
         const auto& p = tx.sent[0].payload;
         CHECK_EQ(tx.sent[0].id, product::mavmsg::ImuData::kId);
         CHECK_EQ(mavlink2::wire::get_u32(p.data(), 4), 77u);

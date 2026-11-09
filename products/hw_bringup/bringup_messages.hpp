@@ -106,4 +106,28 @@ struct ImuData {
     }
 };
 
+struct GnssFix {
+    static constexpr std::uint32_t kId = 62005;
+    static constexpr std::uint8_t kCrcExtra = 219;
+    static constexpr std::size_t kLen = 37;
+    std::uint64_t time_unix_usec = 0;
+    std::uint32_t time_utc_ms = 0;
+    std::int32_t lat = 0, lon = 0, alt = 0;
+    std::uint16_t year = 0, hdop = 0xFFFF, speed = 0xFFFF, course = 0xFFFF;
+    std::uint8_t month = 0, day = 0, fix_quality = 0, satellites = 0, flags = 0;
+    void pack(std::uint8_t* p) const {
+        put_u32(p, 0, static_cast<std::uint32_t>(time_unix_usec));
+        put_u32(p, 4, static_cast<std::uint32_t>(time_unix_usec >> 32));
+        put_u32(p, 8, time_utc_ms);
+        put_i32(p, 12, lat);
+        put_i32(p, 16, lon);
+        put_i32(p, 20, alt);
+        put_u16(p, 24, year);
+        put_u16(p, 26, hdop);
+        put_u16(p, 28, speed);
+        put_u16(p, 30, course);
+        p[32] = month; p[33] = day; p[34] = fix_quality; p[35] = satellites; p[36] = flags;
+    }
+};
+
 }  // namespace product::mavmsg

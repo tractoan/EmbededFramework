@@ -11,6 +11,20 @@ namespace product {
 namespace bu = app::bringup;
 using namespace mavlink2;
 
+namespace {
+// GGA quality -> GPS_FIX_TYPE của MAVLink
+std::uint8_t gps_fix_type(const device::GnssFix& f) {
+    if (!(f.flags & device::GnssFix::kPositionValid)) return GPS_FIX_TYPE_NO_FIX;
+    switch (f.quality) {
+        case 2: return GPS_FIX_TYPE_DGPS;
+        case 4: return GPS_FIX_TYPE_RTK_FIXED;
+        case 5: return GPS_FIX_TYPE_RTK_FLOAT;
+        case 6: return GPS_FIX_TYPE_2D_FIX;   // ước lượng (dead reckoning)
+        default: return (f.flags & device::GnssFix::kAltitudeValid) ? GPS_FIX_TYPE_3D_FIX : GPS_FIX_TYPE_2D_FIX;
+    }
+}
+}  // namespace
+
 bool BringupDialect::crc_extra(std::uint32_t msgid, std::uint8_t& out) const {
     // Chỉ bản tin giao diện GỬI xuống mới cần (bản tin chuẩn giao thức đã biết).
     if (msgid == mavmsg::OutputSet::kId) {
@@ -99,6 +113,39 @@ void BringupDialect::on_event(const msg::Event& e, Sender& tx) {
                 std::memcpy(m.data, p + off, m.count);
                 tx.send(m);
             }
+            return;
+        }
+        case bu::kGnssFix: {   // NMEA đã giải mã -> bản tin riêng (đủ ngày/giờ UTC) + GPS_RAW_INT chuẩn
+            device::GnssFix f{};
+            if (!bu::get_record(e, f)) return;
+            mavmsg::GnssFix m;
+            m.time_unix_usec = f.unix_time_us();
+            m.time_utc_ms    = f.time_ms;
+            m.lat            = f.lat_e7;
+            m.lon            = f.lon_e7;
+            m.alt            = f.alt_mm;
+            m.year           = f.year;
+            m.month          = f.month;
+            m.day            = f.day;
+            m.hdop           = f.hdop_x100;
+            m.speed          = f.speed_cms;
+            m.course         = f.cog_cdeg;
+            m.fix_quality    = f.quality;
+            m.satellites     = f.satellites;
+            m.flags          = f.flags;
+            tx.send(m);
+
+            GpsRawInt g;
+            g.time_usec          = m.time_unix_usec;
+            g.lat                = f.lat_e7;
+            g.lon                = f.lon_e7;
+            g.alt                = f.alt_mm;
+            g.eph                = f.hdop_x100;
+            g.vel                = f.speed_cms;
+            g.cog                = f.cog_cdeg;
+            g.satellites_visible = f.satellites;
+            g.fix_type           = gps_fix_type(f);
+            tx.send(g);
             return;
         }
         case bu::kStatusText: {
