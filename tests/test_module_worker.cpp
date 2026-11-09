@@ -171,6 +171,9 @@ TEST(module_worker_period_change_at_runtime) {
 
 TEST(module_worker_start_failure_and_config_override) {
     Ctx c;
+    // Pool stack là bộ cấp phát tăng dần: trả về mốc sau mỗi khối (mọi thread đã join) để các khối
+    // không cộng dồn – sản phẩm nhỏ (thermo_lite: pool 8 KB) vẫn đủ chỗ.
+    const std::size_t pool_mark = osal::stack_pool_stats().used;
     {   // module không có worker mà sản phẩm lại cấu hình worker -> lỗi cấu hình
         PlainModule plain;
         app::ModuleManager mm;
@@ -190,6 +193,7 @@ TEST(module_worker_start_failure_and_config_override) {
         mm.stop();
         CHECK(m.stopped_.load());
     }
+    osal::release_stack_pool_for_test(pool_mark);
     {   // worker thứ nhất đã chạy, worker thứ hai lỗi -> worker thứ nhất phải được dừng lại
         WorkerModule ok_mod, bad_mod;
         app::ModuleManager mm;
@@ -203,6 +207,7 @@ TEST(module_worker_start_failure_and_config_override) {
         CHECK_EQ(osal::thread_count(), threads_before);
         mm.stop();
     }
+    osal::release_stack_pool_for_test(pool_mark);
     {   // sản phẩm ghi đè priority/stack của worker
         WorkerModule m;
         app::ModuleManager mm;
