@@ -2,6 +2,7 @@
 # state machine, khởi động hệ thống.
 add_library(ep_app_runtime STATIC
   runtime/src/module_manager.cpp
+  runtime/src/module_worker.cpp
   runtime/src/system.cpp)
 target_include_directories(ep_app_runtime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/runtime/include)
 target_link_libraries(ep_app_runtime PUBLIC ep_services ep_comm)

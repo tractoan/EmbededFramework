@@ -8,6 +8,7 @@ add_executable(ep_tests
   test_event_bus.cpp
   test_param_store.cpp
   test_module_manager.cpp
+  test_module_worker.cpp
   test_alarm_controller.cpp
   test_cli_protocol.cpp
   test_modbus.cpp

@@ -128,9 +128,15 @@ int System::SysCli::on_command(int argc, char** argv, svc::CommandOutput& out) {
     }
     if (std::strcmp(sub, "modules") == 0) {
         for (std::size_t i = 0; i < sys_.modules_.count(); ++i) {
-            const IModule* m = sys_.modules_.at(i);
-            out.print("  [%u] %-16s tick=%lu ms\r\n", static_cast<unsigned>(i), m->name(),
+            IModule* m = sys_.modules_.at(i);
+            out.print("  [%u] %-16s tick=%lu ms", static_cast<unsigned>(i), m->name(),
                       static_cast<unsigned long>(m->tick_period_ms()));
+            if (const ModuleWorkerBase* w = m->worker()) {
+                out.print("  worker=%s jobs=%lu dropped=%lu ticks=%lu queue=%u", w->config().name,
+                          static_cast<unsigned long>(w->processed()), static_cast<unsigned long>(w->dropped()),
+                          static_cast<unsigned long>(w->ticks()), static_cast<unsigned>(w->depth()));
+            }
+            out.print("\r\n");
         }
         return 0;
     }
