@@ -733,10 +733,17 @@ Khối GPIO kiểu "function select" (Raspberry Pi BCM2711) không theo mô hìn
 chân có thanh ghi `set`/`clr` hoặc dành cả bank cho firmware.
 
 **Mức độ kiểm chứng:** chưa có QNX SDP (cần license) nên **chưa biên dịch bằng qcc và chưa chạy trên QNX
-thật**. Mã QNX được biên dịch với header `hw/i2c.h` thật của QNX (bản trong BSP công khai) và một lớp giả lập
-`devctl`/`mmap_device_memory` trên Linux (không nằm trong repo): toàn bộ unit test pass, firmware đọc nhiệt độ
-qua `QnxI2c` → TMP102 giả, Modbus RTU qua pty, GPIO ghi đúng thanh ghi DIRM/OEN. Logic GPIO thanh ghi
-có unit test riêng chạy trên mọi host.
+thật**. Mã QNX được biên dịch (`-Wall -Wextra`, không warning) với header `hw/i2c.h` thật của QNX (bản trong BSP
+công khai) và một lớp giả lập `devctl`/`mmap_device_memory` trên Linux (không nằm trong repo), trên đó:
+- toàn bộ unit test pass; `QnxI2c` được thử riêng: bố cục gói tin, SEND/RECV/SENDRECV, NACK, giới hạn kích thước;
+- firmware: đọc nhiệt độ qua `QnxI2c` → TMP102 giả; Modbus RTU qua pty; MAVLink qua TCP (đọc/ghi tham số);
+  tham số giữ được sau khởi động lại; LED cảnh báo tắt / nháy chậm / nháy nhanh đúng theo mức cảnh báo trong
+  khi LED trạng thái cùng thanh ghi vẫn nháy đều (không ghi đè nhau); thiếu quyền, thiếu I2C, chuỗi GPIO sai
+  đều chỉ cảnh báo và chạy tiếp.
+
+Logic GPIO thanh ghi có unit test riêng chạy trên mọi host (kể cả hai thread cùng đọc-sửa-ghi một thanh ghi),
+được fuzz 1 triệu chuỗi cấu hình dưới ASan/UBSan và kiểm chứng bằng mutation test (mọi lỗi cài vào đều bị test
+bắt). Toàn bộ unit test chạy sạch dưới ThreadSanitizer.
 
 ---
 

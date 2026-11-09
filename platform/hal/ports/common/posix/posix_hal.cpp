@@ -173,7 +173,10 @@ Status FileStorage::read(std::size_t offset, void* data, std::size_t len) {
     if (offset + len > size_) return Status::OutOfRange;
     std::memset(data, 0xFF, len);   // vùng chưa ghi = trạng thái erased của Flash
     if (FILE* f = std::fopen(path_, "rb")) {
-        if (std::fseek(f, static_cast<long>(offset), SEEK_SET) == 0) (void)std::fread(data, 1, len, f);
+        if (std::fseek(f, static_cast<long>(offset), SEEK_SET) == 0) {
+            const std::size_t got = std::fread(data, 1, len, f);   // đọc thiếu (file ngắn hơn) = phần còn lại 0xFF
+            (void)got;
+        }
         std::fclose(f);
     }
     return Status::Ok;
