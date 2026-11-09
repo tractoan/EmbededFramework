@@ -2,7 +2,6 @@
 // Peripheral mô phỏng trên Linux: cho phép phát triển & test nghiệp vụ không cần phần cứng.
 #include <atomic>
 #include <chrono>
-#include <string>
 
 #include "hal/board.hpp"
 
@@ -20,18 +19,6 @@ private:
     bool verbose_;
     PinMode mode_ = PinMode::Input;
     std::atomic<bool> level_{false};
-};
-
-// Console UART = stdin/stdout.
-class SimConsoleUart final : public IUart {
-public:
-    core::Status open(const UartConfig& cfg) override;
-    void close() override {}
-    std::size_t write(const std::uint8_t* data, std::size_t len, std::uint32_t timeout_ms) override;
-    std::size_t read(std::uint8_t* data, std::size_t len, std::uint32_t timeout_ms) override;
-
-private:
-    bool eof_ = false;
 };
 
 // "UART" thứ hai mô phỏng bằng UDP (127.0.0.1:15020, đổi bằng env EP_SIM_AUX_PORT).
@@ -74,18 +61,5 @@ private:
     std::chrono::steady_clock::time_point start_;
 };
 
-// "Flash" mô phỏng bằng file (mặc định ./ep_nvram.bin, đổi bằng env EP_SIM_NVRAM).
-class SimFileStorage final : public INvStorage {
-public:
-    explicit SimFileStorage(std::size_t size);
-    std::size_t size() const override { return size_; }
-    core::Status read(std::size_t offset, void* data, std::size_t len) override;
-    core::Status write(std::size_t offset, const void* data, std::size_t len) override;
-    core::Status erase() override;
-
-private:
-    std::string path_;
-    std::size_t size_;
-};
 
 }  // namespace hal::sim

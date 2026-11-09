@@ -1,6 +1,7 @@
 # Nền tảng: Linux host + phần cứng mô phỏng (dùng để phát triển nghiệp vụ, CI, unit test)
 set(EP_OSAL_PORT posix)
 set(EP_HAL_PORT  linux_sim)
+set(EP_HAL_COMMON linux)    # console stdio, FileStorage... dùng chung với các board Linux
 set(EP_NET_PORT  posix)     # TCP/IP qua socket của host
 
 find_package(Threads REQUIRED)

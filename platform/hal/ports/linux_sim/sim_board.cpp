@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include "linux/linux_hal.hpp"
 #include "sim_peripherals.hpp"
 
 namespace hal {
@@ -49,11 +50,11 @@ private:
     sim::SimGpio status_led_{"StatusLed", false};   // heartbeat -> không in để tránh spam
     sim::SimGpio alarm_led_{"AlarmLed", false};   // thay đổi pattern đã được log bởi LedService
     sim::SimGpio button_{"UserButton", true};
-    sim::SimConsoleUart console_;
+    host::StdioUart console_;   // console = terminal
     sim::SimUdpUart aux_{15020};
     bool aux_ok_ = true;
     sim::SimI2c i2c_;
-    sim::SimFileStorage storage_{4096};
+    host::FileStorage storage_{host::env_or("EP_SIM_NVRAM", "ep_nvram.bin"), 4096};   // "Flash" = file
 };
 
 }  // namespace
