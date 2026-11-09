@@ -1,6 +1,7 @@
 #pragma once
-// Peripheral THẬT trên Linux (CPU nhúng x86/ARM chạy Linux): tty (RS232/RS485), GPIO character
-// device v2, cổng SDLC/HDLC (SyncLink/N_HDLC, chardev, netdev generic-HDLC), console stdio, Flash = file.
+// Peripheral THẬT trên Linux (CPU nhúng x86/ARM chạy Linux) riêng của board bring-up: tty có RS485,
+// GPIO character device v2 có bias/active-low, cổng SDLC/HDLC (SyncLink/N_HDLC, chardev, netdev generic-HDLC).
+// Console stdio và Flash = file dùng chung: platform/hal/ports/common/linux (hal::host).
 #include <atomic>
 #include <string>
 #include <utility>
@@ -62,30 +63,6 @@ private:
     core::Status open_synclink(const std::string& path, const HdlcConfig& cfg);
     std::string spec_, kind_, target_;
     std::atomic<int> fd_{-1};
-};
-
-class StdioUart final : public IUart {
-public:
-    core::Status open(const UartConfig&) override { return core::Status::Ok; }
-    void close() override {}
-    std::size_t write(const std::uint8_t* data, std::size_t len, std::uint32_t timeout_ms) override;
-    std::size_t read(std::uint8_t* data, std::size_t len, std::uint32_t timeout_ms) override;
-
-private:
-    bool eof_ = false;
-};
-
-class FileStorage final : public INvStorage {
-public:
-    FileStorage(std::string path, std::size_t size) : path_(std::move(path)), size_(size) {}
-    std::size_t size() const override { return size_; }
-    core::Status read(std::size_t offset, void* data, std::size_t len) override;
-    core::Status write(std::size_t offset, const void* data, std::size_t len) override;
-    core::Status erase() override;
-
-private:
-    std::string path_;
-    std::size_t size_;
 };
 
 }  // namespace hal::linux_cpu

@@ -5,28 +5,28 @@
 #include <utility>
 
 #include "core/config.hpp"
-#include "services/buffer.hpp"
+#include "messaging/buffer.hpp"
 
-namespace svc {
+namespace msg {
 
 using EventId = std::uint16_t;
 
-// Phân vùng EventId theo lớp để tránh trùng lặp giữa các nhóm phát triển.
+// Quy ước phân vùng EventId theo lớp để các nhóm phát triển không trùng ID.
+// messaging chỉ định nghĩa DẢI; mỗi lớp tự khai báo event của mình trong dải của nó:
+//   kSystemBase  : app/runtime   (app::sys::kSystemStarted...)
+//   kServiceBase : services      (svc::evt::kParamChanged...)
+//   kAppBase     : nghiệp vụ     (app::events::kTemperature...)
 namespace evt {
 inline constexpr EventId kAny         = 0xFFFF;   // wildcard khi subscribe
-inline constexpr EventId kSystemBase  = 0x0000;
-inline constexpr EventId kServiceBase = 0x0100;
-inline constexpr EventId kAppBase     = 0x1000;   // nghiệp vụ: 0x1000..0xFFFE
-
-inline constexpr EventId kSystemStarted  = kSystemBase + 1;
-inline constexpr EventId kSystemShutdown = kSystemBase + 2;
-inline constexpr EventId kParamChanged   = kServiceBase + 1;   // payload: svc::ParamChanged
+inline constexpr EventId kSystemBase  = 0x0000;   // 0x0000..0x00FF
+inline constexpr EventId kServiceBase = 0x0100;   // 0x0100..0x0FFF
+inline constexpr EventId kAppBase     = 0x1000;   // 0x1000..0xFFFE
 }  // namespace evt
 
 // Event = message đi qua EventBus / queue, copy theo giá trị -> an toàn giữa các thread.
 // Hai phần dữ liệu, dùng riêng hoặc kết hợp:
 //   payload : nhỏ (<= EP_CFG_EVENT_PAYLOAD_SIZE), nằm ngay trong Event, không cấp phát.
-//   buffer  : lớn / kích thước thay đổi, svc::Buffer đếm tham chiếu – copy Event chỉ tăng
+//   buffer  : lớn / kích thước thay đổi, msg::Buffer đếm tham chiếu – copy Event chỉ tăng
 //             tham chiếu, mọi listener dùng chung một vùng nhớ, tự giải phóng khi hết người dùng.
 // Mẫu thường gặp: payload chứa "header" mô tả (số mẫu, định dạng...), buffer chứa dữ liệu.
 struct Event {
@@ -84,4 +84,4 @@ public:
     virtual void on_event(const Event& e) = 0;
 };
 
-}  // namespace svc
+}  // namespace msg

@@ -10,7 +10,7 @@ public:
         ++inits;
         return core::Status::Ok;
     }
-    void on_event(const svc::Event& e) override {
+    void on_event(const msg::Event& e) override {
         if (e.id == 0x2100) ++events;
     }
     std::uint32_t tick_period_ms() const override { return 10; }
@@ -20,7 +20,7 @@ public:
 }  // namespace
 
 TEST(module_manager_dispatches_events_and_ticks) {
-    svc::EventBus bus;
+    msg::EventBus bus;
     svc::ParamStore params;
     svc::CommandService cli;
     svc::LedService leds;
@@ -33,8 +33,8 @@ TEST(module_manager_dispatches_events_and_ticks) {
     CHECK(core::is_ok(mm.init_all(ctx)));
     CHECK_EQ(m.inits, 1);
 
-    bus.publish(svc::Event::make(0x2100));   // từ "thread khác" -> vào queue
-    bus.publish(svc::Event::make(0x2200));
+    bus.publish(msg::Event::make(0x2100));   // từ "thread khác" -> vào queue
+    bus.publish(msg::Event::make(0x2200));
     CHECK_EQ(m.events, 0);                    // chưa xử lý cho tới khi app thread chạy
     mm.process(0);
     mm.process(0);

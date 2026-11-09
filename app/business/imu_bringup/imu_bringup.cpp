@@ -44,7 +44,7 @@ void ImuBringup::on_stop() {
     for (std::size_t i = 0; i < count_; ++i) imus_[i]->stop();
 }
 
-void ImuBringup::on_event(const svc::Event& e) {
+void ImuBringup::on_event(const msg::Event& e) {
     svc::ParamChanged pc{};
     if (e.id != svc::evt::kParamChanged || !e.get(pc)) return;
     if (pc.id == params::kImuRateHz) period_ms_ = 1000u / static_cast<std::uint32_t>(pc.value);   // tick kế tiếp áp dụng

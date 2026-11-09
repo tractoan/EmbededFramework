@@ -1,8 +1,8 @@
-#include "mavlink/codec.hpp"
+#include "mavlink2/codec.hpp"
 
 #include "utils/crc.hpp"
 
-namespace mavlink {
+namespace mavlink2 {
 
 std::size_t encode(std::uint8_t* out, std::size_t cap, std::uint8_t seq, std::uint8_t sysid, std::uint8_t compid,
                    std::uint32_t msgid, std::uint8_t crc_extra, const std::uint8_t* payload, std::size_t len) {
@@ -97,4 +97,4 @@ bool starts_with_valid_frame(const std::uint8_t* data, std::size_t len, CrcLooku
     return false;
 }
 
-}  // namespace mavlink
+}  // namespace mavlink2

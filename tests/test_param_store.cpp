@@ -10,7 +10,7 @@ const svc::ParamDef kDefs[] = {
 }
 
 TEST(param_store_validation_and_events) {
-    svc::EventBus bus;
+    msg::EventBus bus;
     mock::Recorder rec;
     bus.subscribe(svc::evt::kParamChanged, &rec);
     svc::ParamStore ps;

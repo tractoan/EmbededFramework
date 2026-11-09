@@ -9,23 +9,23 @@
 namespace product {
 
 namespace bu = app::bringup;
-using namespace mavlink;
+using namespace mavlink2;
 
 bool BringupDialect::crc_extra(std::uint32_t msgid, std::uint8_t& out) const {
     // Chỉ bản tin giao diện GỬI xuống mới cần (bản tin chuẩn giao thức đã biết).
-    if (msgid == msg::OutputSet::kId) {
-        out = msg::OutputSet::kCrcExtra;
+    if (msgid == mavmsg::OutputSet::kId) {
+        out = mavmsg::OutputSet::kCrcExtra;
         return true;
     }
     return false;
 }
 
-void BringupDialect::on_event(const svc::Event& e, Sender& tx) {
+void BringupDialect::on_event(const msg::Event& e, Sender& tx) {
     switch (e.id) {
         case bu::kBringupStatus: {
             bu::BringupStatus s{};
             if (!bu::get_record(e, s)) return;
-            msg::BringupStatus m;
+            mavmsg::BringupStatus m;
             m.time_boot_ms  = s.uptime_ms;
             m.gnss_rx_bytes = s.gnss_rx_bytes;
             m.gnss_tx_bytes = s.gnss_tx_bytes;
@@ -40,8 +40,8 @@ void BringupDialect::on_event(const svc::Event& e, Sender& tx) {
         case bu::kLoopbackStatus: {
             bu::LoopbackHeader h{};
             if (!e.get(h) || e.buffer.size() != h.count * sizeof(bu::PortResult)) return;
-            msg::SerialLoopbackStatus m;
-            const std::size_t n = h.count < msg::SerialLoopbackStatus::kPorts ? h.count : msg::SerialLoopbackStatus::kPorts;
+            mavmsg::SerialLoopbackStatus m;
+            const std::size_t n = h.count < mavmsg::SerialLoopbackStatus::kPorts ? h.count : mavmsg::SerialLoopbackStatus::kPorts;
             for (std::size_t i = 0; i < n; ++i) {   // bản tin chứa tối đa 12 cổng
                 bu::PortResult r{};
                 std::memcpy(&r, e.buffer.data() + i * sizeof(r), sizeof(r));
@@ -60,7 +60,7 @@ void BringupDialect::on_event(const svc::Event& e, Sender& tx) {
         case bu::kIoStatus: {
             bu::IoStatus s{};
             if (!e.get(s)) return;
-            msg::IoStatus m;
+            mavmsg::IoStatus m;
             m.time_boot_ms = s.time_ms;
             m.input_mask   = s.inputs;
             m.output_mask  = s.outputs;
@@ -72,7 +72,7 @@ void BringupDialect::on_event(const svc::Event& e, Sender& tx) {
         case bu::kImuSample: {
             bu::ImuSample s{};
             if (!bu::get_record(e, s)) return;
-            msg::ImuData m;
+            mavmsg::ImuData m;
             m.time_boot_ms = s.time_ms;
             m.frame_count  = s.frames;
             m.error_count  = s.errors;
@@ -115,21 +115,21 @@ void BringupDialect::on_event(const svc::Event& e, Sender& tx) {
 }
 
 void BringupDialect::on_message(const Message& m, comm::Services& s, Sender& /*tx*/) {
-    if (m.msgid == msg::OutputSet::kId) {
-        const auto o = msg::OutputSet::unpack(m.payload);
-        s.bus.publish(svc::Event::make(bu::kOutputSetRequest, bu::OutputSetRequest{o.mask, o.value}));
+    if (m.msgid == mavmsg::OutputSet::kId) {
+        const auto o = mavmsg::OutputSet::unpack(m.payload);
+        s.bus.publish(msg::Event::make(bu::kOutputSetRequest, bu::OutputSetRequest{o.mask, o.value}));
         return;
     }
     if (m.msgid == SerialControl::kId) {
         const auto sc = SerialControl::unpack(m.payload);
         if (sc.device != SERIAL_CONTROL_DEV_GPS1 || (sc.flags & SERIAL_CONTROL_FLAG_REPLY)) return;
         if (sc.count == 0 && sc.baudrate == 0) return;
-        svc::Buffer data;
+        msg::Buffer data;
         if (sc.count > 0) {
-            data = svc::Buffer::copy_of(sc.data, sc.count);
+            data = msg::Buffer::copy_of(sc.data, sc.count);
             if (!data) return;   // hết pool buffer: bỏ lệnh (GUI không nhận được phản hồi -> gửi lại)
         }
-        s.bus.publish(svc::Event::make(bu::kGnssTxRequest, bu::GnssTxHeader{sc.baudrate}, std::move(data)));
+        s.bus.publish(msg::Event::make(bu::kGnssTxRequest, bu::GnssTxHeader{sc.baudrate}, std::move(data)));
     }
 }
 
@@ -138,7 +138,7 @@ std::uint8_t BringupDialect::on_command(const CommandLong& c, comm::Services& s,
         const long ch = std::lround(c.param[0]);
         if (ch < 0 || ch > 31) return MAV_RESULT_DENIED;
         const std::uint32_t bit = 1u << ch;
-        s.bus.publish(svc::Event::make(bu::kOutputSetRequest, bu::OutputSetRequest{bit, c.param[1] >= 0.5f ? bit : 0u}));
+        s.bus.publish(msg::Event::make(bu::kOutputSetRequest, bu::OutputSetRequest{bit, c.param[1] >= 0.5f ? bit : 0u}));
         return MAV_RESULT_ACCEPTED;
     }
     return MAV_RESULT_UNSUPPORTED;

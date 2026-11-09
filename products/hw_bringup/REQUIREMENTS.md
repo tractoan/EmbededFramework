@@ -110,6 +110,7 @@
 | MAV-08 | Nhận xuống: lệnh cấu hình máy thu GNSS. | `SERIAL_CONTROL` (GPS1) | Đã làm |
 | MAV-09 | Đọc/ghi/lưu tham số từ GUI. | `PARAM_*`, `MAV_CMD_PREFLIGHT_STORAGE` | Đã làm |
 | MAV-10 | Phát hiện mất kết nối GUI. | không thấy heartbeat GUI 3 s | Đã làm |
+| MAV-12 | GUI kết nối được qua mạng (UDP) ngoài cổng serial, khi CPU có Ethernet. | UDP 14560, trả lời địa chỉ gửi gần nhất | Đã làm |
 | MAV-11 | _(vd. GUI cần lệnh bắt đầu/dừng kiểm tra, reset bộ đếm, xuất báo cáo PASS/FAIL tổng?)_ | | Chờ |
 
 ---
@@ -142,7 +143,7 @@
 | CON-03 | Ánh xạ thiết bị Linux đổi được lúc chạy, không cần build lại (`EP_BOARD_CONF`, `EP_SERIAL<i>`…). | Đã làm |
 | CON-04 | Có unit test cho logic quan trọng (phát hiện GNSS 5 s, loopback, giải mã IMU, MAVLink). | Đã làm |
 | CON-05 | Chạy như dịch vụ systemd, tự khởi động lại. | Đã làm |
-| CON-06 | Không cấp phát heap sau khởi động (bộ chặn heap của framework); dữ liệu lớn dùng `svc::Buffer` + pool tĩnh. | Đã làm |
+| CON-06 | Không cấp phát heap sau khởi động (bộ chặn heap của framework); dữ liệu lớn dùng `msg::Buffer` + pool tĩnh. | Đã làm |
 | CON-07 | Priority và stack của từng task cấu hình được (IMU 12, GNSS 10, giao diện 9, app 8, loopback 5, console 4). | Đã làm |
 
 ---
@@ -153,6 +154,7 @@
 |---|---|---|
 | 2026-11-03 | | Bản đầu: 12 serial (1 GUI, 1 GNSS, 10 loopback), GNSS 5 s → loopback, 20 DI / 20 DO, 2 IMU SDLC/HDLC, MAVLink. |
 | 2026-11-06 | | Nâng cấp theo framework mới (nhánh main): cấu trúc platform/communication/app.business, target `linux_cpu`, Event + Buffer, CON-06, CON-07. |
+| 2026-11-09 | | Nâng cấp theo main mới: lớp messaging (`msg::`), MAVLink v2 tách thành `communication/mavlink2` (song song MAVLink v1 của framework), HAL Linux dùng chung, priority SCHED_FIFO trên `linux_cpu`, MAV-12 (UDP). |
 | | | |
 
 ---

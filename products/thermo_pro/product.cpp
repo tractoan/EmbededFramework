@@ -1,13 +1,20 @@
 // Sản phẩm "thermo_pro": giám sát nhiệt công nghiệp – lấy mẫu nhanh, cảnh báo có chốt (latch),
-// module thống kê riêng, giao tiếp CLI + Modbus RTU trên 2 kênh, đổi giao thức lúc chạy.
+// module thống kê riêng, giao tiếp CLI / Modbus RTU / MAVLink v1 qua UART, TCP và UDP,
+// đổi giao thức lúc chạy.
 #include "alarm_controller/alarm_controller.hpp"
 #include "app/product.hpp"
 #include "comm/cli_protocol.hpp"
+#include "mavlink/mavlink_protocol.hpp"
+#include "mavlink_map.hpp"
 #include "modbus/modbus_rtu.hpp"
 #include "modbus_map.hpp"
-#include "services/buffer_allocators.hpp"
+#include "messaging/buffer_allocators.hpp"
 #include "stats_reporter.hpp"
 #include "temperature_monitor/temperature_monitor.hpp"
+
+#if EP_HAS_NET
+#include "comm/net_streams.hpp"
+#endif
 
 namespace product {
 
@@ -34,11 +41,11 @@ app::AlarmController::Config alarm_cfg() {
 // Bộ nhớ cho payload lớn: chỉ pool tĩnh 3 lớp kích thước (O(1), không phân mảnh, không heap).
 // Sức chứa mỗi block tính theo header 24 B trên host 64-bit (MCU 32-bit: 16 B).
 void setup_buffers() {
-    static svc::StaticBlockPool<64, 16> small;    // lô <= 20 mẫu
-    static svc::StaticBlockPool<512, 8> medium;   // lô <= 244 mẫu
-    static svc::StaticBlockPool<2048, 4> large;   // lô <= 1012 mẫu
-    static svc::PoolAllocator pools({&small, &medium, &large});
-    svc::Buffer::set_default_allocator(&pools);
+    static msg::StaticBlockPool<64, 16> small;    // lô <= 20 mẫu
+    static msg::StaticBlockPool<512, 8> medium;   // lô <= 244 mẫu
+    static msg::StaticBlockPool<2048, 4> large;   // lô <= 1012 mẫu
+    static msg::PoolAllocator pools({&small, &medium, &large});
+    msg::Buffer::set_default_allocator(&pools);
 }
 
 core::Status setup_modules(app::ModuleManager& modules) {
@@ -53,6 +60,37 @@ core::Status setup_modules(app::ModuleManager& modules) {
     return st;
 }
 
+#if EP_HAS_NET
+// Kênh mạng (chỉ khi target có TCP/IP – EP_NET_PORT):
+//   tcp : server cổng 5760 (cổng TCP chuẩn của MAVLink), mặc định MAVLink; đổi được sang Modbus/CLI
+//   udp : gửi tới trạm mặt đất ở cổng 14550 (mặc định của QGroundControl/Mission Planner)
+constexpr std::uint16_t kTcpPort       = 5760;
+constexpr std::uint16_t kGcsUdpPort    = 14550;
+constexpr const char* kGcsAddress      = "127.0.0.1";   // địa chỉ trạm mặt đất (cấu hình theo hệ thống)
+
+core::Status setup_network_links(app::ProductSetup& s) {
+    static comm::TcpServerStream tcp;
+    if (core::is_ok(tcp.open(kTcpPort))) {
+        static mavlink::MavlinkV1Protocol tcp_mavlink(mavlink_map());
+        static modbus::ModbusRtuProtocol tcp_modbus(modbus_map());
+        static comm::CliProtocol tcp_cli;
+        const core::Status st = s.links.add_channel("tcp", &tcp, {&tcp_mavlink, &tcp_modbus, &tcp_cli},
+                                                    comm::proto::kMavlink, osal::Priority::Normal, 4096);
+        if (!core::is_ok(st)) return st;
+    }
+    static comm::UdpStream udp;
+    net::Endpoint gcs{};
+    if (core::is_ok(udp.open(0)) && net::Endpoint::parse(kGcsAddress, kGcsUdpPort, gcs)) {
+        udp.set_remote(gcs);
+        static mavlink::MavlinkV1Protocol udp_mavlink(mavlink_map());
+        return s.links.add_channel("udp", &udp, {&udp_mavlink}, comm::proto::kMavlink, osal::Priority::Normal, 4096);
+    }
+    return core::Status::Ok;   // không có mạng lúc khởi động: chạy tiếp không có kênh mạng
+}
+#else
+core::Status setup_network_links(app::ProductSetup&) { return core::Status::Ok; }
+#endif
+
 core::Status setup_links(app::ProductSetup& s) {
     // Mỗi instance giao thức gắn với một kênh (có trạng thái phiên riêng).
     // Thứ tự trong danh sách = thứ tự thử khi auto-detect (giao thức nhị phân, chặt chẽ hơn, đặt trước).
@@ -62,14 +100,19 @@ core::Status setup_links(app::ProductSetup& s) {
                                           osal::Priority{6}, 4096);
     if (!core::is_ok(st)) return st;
 
-    // Cổng phụ (RS485 trên board thật, UDP trên mô phỏng): mặc định Modbus, đổi được sang CLI/auto.
+    // Cổng phụ (RS485 / radio telemetry trên board thật, UDP trên mô phỏng): mặc định Modbus,
+    // đổi được sang MAVLink/CLI hoặc auto (tự nhận ra Modbus hay MAVLink từ khung đầu tiên).
     static comm::UartStream aux;
     aux.attach(s.board.uart(hal::UartId::Aux));
-    if (!aux.valid()) return core::Status::Ok;
-    static comm::CliProtocol aux_cli;
-    static modbus::ModbusRtuProtocol aux_modbus(modbus_map());
-    return s.links.add_channel("aux", &aux, {&aux_modbus, &aux_cli}, comm::proto::kModbusRtu, osal::Priority::Normal,
-                               4096);
+    if (aux.valid()) {
+        static comm::CliProtocol aux_cli;
+        static modbus::ModbusRtuProtocol aux_modbus(modbus_map());
+        static mavlink::MavlinkV1Protocol aux_mavlink(mavlink_map());
+        st = s.links.add_channel("aux", &aux, {&aux_modbus, &aux_mavlink, &aux_cli}, comm::proto::kModbusRtu,
+                                 osal::Priority::Normal, 4096);
+        if (!core::is_ok(st)) return st;
+    }
+    return setup_network_links(s);
 }
 }  // namespace
 

@@ -23,7 +23,7 @@ struct Record {
 static_assert(sizeof(Header) == 8 && sizeof(Record) == 8, "NV layout must be packed");
 }  // namespace
 
-void ParamStore::init(hal::INvStorage* storage, EventBus* bus) {
+void ParamStore::init(hal::INvStorage* storage, msg::EventBus* bus) {
     storage_ = storage;
     bus_     = bus;
 }
@@ -72,7 +72,7 @@ core::Status ParamStore::set(ParamId id, std::int32_t value) {
         if (e.value == value) return core::Status::Ok;
         e.value = value;
     }
-    if (bus_ != nullptr) bus_->publish(Event::make(evt::kParamChanged, ParamChanged{id, value}));
+    if (bus_ != nullptr) bus_->publish(msg::Event::make(evt::kParamChanged, ParamChanged{id, value}));
     return core::Status::Ok;
 }
 
@@ -106,8 +106,11 @@ const ParamDef* ParamStore::at(std::size_t index, std::int32_t* value) const {
 
 core::Status ParamStore::save() {
     if (storage_ == nullptr) return core::Status::NotSupported;
+    // Một lần save/load tại một thời điểm: hai save xen kẽ (erase/ghi) sẽ làm hỏng bản ghi NV.
+    // Snapshot lấy SAU khi giữ nv_mtx_ -> save đến sau luôn ghi giá trị mới hơn.
+    osal::LockGuard nv(nv_mtx_);
 
-    // Chụp snapshot trong khóa, ghi Flash (chậm) ngoài khóa.
+    // Chụp snapshot trong khóa dữ liệu, ghi Flash (chậm) ngoài khóa dữ liệu (get/set không bị chặn).
     std::array<Record, core::cfg::kMaxParams> recs{};
     Header hdr{kMagic, kVersion, 0};
     {
@@ -128,6 +131,7 @@ core::Status ParamStore::save() {
 
 core::Status ParamStore::load() {
     if (storage_ == nullptr) return core::Status::NotSupported;
+    osal::LockGuard nv(nv_mtx_);
 
     Header hdr{};
     core::Status st = storage_->read(0, &hdr, sizeof(hdr));

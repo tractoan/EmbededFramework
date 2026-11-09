@@ -3,19 +3,19 @@
 // Giao thức (MAVLink, CLI...) chỉ ánh xạ các Event này, không biết tới module.
 //
 // Kích thước: payload inline giữ <= 16 byte (mặc định framework); dữ liệu lớn hoặc dài thay đổi
-// nằm trong Event::buffer (svc::Buffer đếm tham chiếu, cấp từ pool TĨNH của sản phẩm):
+// nằm trong Event::buffer (msg::Buffer đếm tham chiếu, cấp từ pool TĨNH của sản phẩm):
 //   - "record": cả struct nằm trong buffer          -> make_record() / get_record()
 //   - header inline + mảng byte/phần tử trong buffer -> Event::make(id, header, buffer)
 // Hết pool -> event mang buffer rỗng, phía nhận bỏ qua (đếm ở "sys buffers").
 #include <cstdint>
 #include <cstring>
 
-#include "services/event.hpp"
+#include "messaging/event.hpp"
 
 namespace app::bringup {
 
-using svc::EventId;
-inline constexpr EventId kBase             = svc::evt::kAppBase + 0x100;
+using msg::EventId;
+inline constexpr EventId kBase             = msg::evt::kAppBase + 0x100;
 inline constexpr EventId kBringupStatus    = kBase + 1;   // record BringupStatus          (1 s)
 inline constexpr EventId kLoopbackStatus   = kBase + 2;   // LoopbackHeader + PortResult[count]  (ser.report_ms)
 inline constexpr EventId kIoStatus         = kBase + 3;   // inline IoStatus               (khi đổi + định kỳ)
@@ -115,13 +115,13 @@ static_assert(sizeof(IoStatus) <= core::cfg::kEventPayloadSize && sizeof(OutputS
 
 // Cả struct nằm trong Event::buffer.
 template <typename T>
-svc::Event make_record(EventId id, const T& value) {
+msg::Event make_record(EventId id, const T& value) {
     static_assert(std::is_trivially_copyable<T>::value, "record must be trivially copyable");
-    return svc::Event::make(id, svc::Buffer::copy_of(&value, sizeof(T)));
+    return msg::Event::make(id, msg::Buffer::copy_of(&value, sizeof(T)));
 }
 
 template <typename T>
-bool get_record(const svc::Event& e, T& out) {
+bool get_record(const msg::Event& e, T& out) {
     if (e.buffer.size() != sizeof(T)) return false;
     std::memcpy(&out, e.buffer.data(), sizeof(T));
     return true;

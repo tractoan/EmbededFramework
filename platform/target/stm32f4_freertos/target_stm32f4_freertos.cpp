@@ -57,30 +57,4 @@ bool stop_requested() { return false; }
 
 }  // namespace target
 
-// ---- Hook bắt buộc của FreeRTOS khi bật cấp phát tĩnh / kiểm tra stack ----
-// (cùng file với target::init để chắc chắn được link vào firmware)
-extern "C" void vApplicationGetIdleTaskMemory(StaticTask_t** tcb, StackType_t** stack, uint32_t* size) {
-    static StaticTask_t idle_tcb;
-    static StackType_t idle_stack[configMINIMAL_STACK_SIZE];
-    *tcb   = &idle_tcb;
-    *stack = idle_stack;
-    *size  = configMINIMAL_STACK_SIZE;
-}
-
-extern "C" void vApplicationGetTimerTaskMemory(StaticTask_t** tcb, StackType_t** stack, uint32_t* size) {
-    static StaticTask_t timer_tcb;
-    static StackType_t timer_stack[configTIMER_TASK_STACK_DEPTH];
-    *tcb   = &timer_tcb;
-    *stack = timer_stack;
-    *size  = configTIMER_TASK_STACK_DEPTH;
-}
-
-extern "C" void vApplicationStackOverflowHook(TaskHandle_t, char*) {
-    taskDISABLE_INTERRUPTS();
-    for (;;) {}
-}
-
-extern "C" void vApplicationMallocFailedHook(void) {
-    taskDISABLE_INTERRUPTS();
-    for (;;) {}
-}
+#include "../common/freertos/freertos_static_hooks.inc"

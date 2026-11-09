@@ -91,12 +91,12 @@ void SerialBringup::update_gnss(std::uint64_t now_ms) {
         const std::size_t n = cfg_.ports->read(g, chunk, sizeof(chunk));
         if (n == 0) break;
         if (!forward_) continue;
-        svc::Buffer buf = svc::Buffer::copy_of(chunk, n);
+        msg::Buffer buf = msg::Buffer::copy_of(chunk, n);
         if (!buf) {   // hết pool: bỏ gói này (xem "sys buffers")
             ++gnss_dropped_;
             continue;
         }
-        ctx_->bus.publish(svc::Event::make(bringup::kGnssRxData, bringup::GnssDataHeader{static_cast<std::uint16_t>(n)},
+        ctx_->bus.publish(msg::Event::make(bringup::kGnssRxData, bringup::GnssDataHeader{static_cast<std::uint16_t>(n)},
                                            std::move(buf)));
     }
 }
@@ -135,7 +135,7 @@ void SerialBringup::publish_loopback() {
         noticed_      = static_cast<std::uint16_t>(noticed_ | bit);
         noticed_ok_   = static_cast<std::uint16_t>(ok ? (noticed_ok_ | bit) : (noticed_ok_ & ~bit));
     }
-    ctx_->bus.publish(svc::Event::make(bringup::kLoopbackStatus, ls, svc::Buffer::copy_of(ports, ls.count * sizeof(ports[0]))));
+    ctx_->bus.publish(msg::Event::make(bringup::kLoopbackStatus, ls, msg::Buffer::copy_of(ports, ls.count * sizeof(ports[0]))));
 }
 
 void SerialBringup::publish_status(std::uint64_t now_ms) {
@@ -166,7 +166,7 @@ void SerialBringup::on_tick(std::uint64_t now_ms) {
     }
 }
 
-void SerialBringup::on_event(const svc::Event& e) {
+void SerialBringup::on_event(const msg::Event& e) {
     svc::ParamChanged pc{};
     if (e.id == svc::evt::kParamChanged && e.get(pc)) {
         if (pc.id >= params::kSerPeriodMs && pc.id <= params::kGnssForward) apply_params();
@@ -222,18 +222,18 @@ int SerialBringup::on_command(int argc, char** argv, svc::CommandOutput& out) {
         }
         line[n++] = '\r';
         line[n++] = '\n';
-        svc::Buffer buf = svc::Buffer::copy_of(line, n);
+        msg::Buffer buf = msg::Buffer::copy_of(line, n);
         if (!buf) {
             out.print("no buffer available\r\n");
             return -1;
         }
-        ctx_->bus.publish(svc::Event::make(bringup::kGnssTxRequest, bringup::GnssTxHeader{0}, std::move(buf)));
+        ctx_->bus.publish(msg::Event::make(bringup::kGnssTxRequest, bringup::GnssTxHeader{0}, std::move(buf)));
         out.print("queued %u bytes\r\n", static_cast<unsigned>(n));
         return 0;
     }
     if (argc >= 3 && std::strcmp(argv[1], "baud") == 0) {
         const bringup::GnssTxHeader req{static_cast<std::uint32_t>(std::strtoul(argv[2], nullptr, 10))};
-        ctx_->bus.publish(svc::Event::make(bringup::kGnssTxRequest, req));
+        ctx_->bus.publish(msg::Event::make(bringup::kGnssTxRequest, req));
         return 0;
     }
     if (cfg_.gnss_port < 0) {

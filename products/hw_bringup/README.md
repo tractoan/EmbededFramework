@@ -17,7 +17,8 @@ Firmware chạy trên **CPU nhúng (Linux)** để kiểm tra bo mạch, báo k�
 ```
  products/hw_bringup   product.cpp (lắp ráp) · bringup_config.hpp (ánh xạ cổng/IMU) · mavlink_dialect.cpp (Event <-> bản tin)
  app/business          SerialBringup (loopback + phát hiện GNSS) · IoBringup · ImuBringup   (chỉ nói chuyện qua Event/Param)
- communication/mavlink MavlinkProtocol: khung v1/v2, heartbeat, PARAM_* <-> ParamStore, COMMAND_LONG/ACK, IDialect
+ communication/mavlink2 Mavlink2Protocol: khung v2 (+nhận v1), heartbeat, PARAM_* <-> ParamStore, COMMAND_LONG/ACK, IDialect
+ communication/net     UdpStream: kênh MAVLink thứ hai qua mạng (khi target có TCP/IP)
  services              SerialPortBank (thread/cổng: Loopback|Stream|External) · HdlcImu (thread đọc khung)
  platform/device       GpioInput/OutputBank (DI/DO) · ImuFormat + decode_imu_frame (giải mã theo bảng)
  platform/hal          IBoard::serial(i) / digital_input(i) / digital_output(i) / hdlc(i) · IHdlcPort
@@ -35,9 +36,14 @@ Luồng: thread cổng/IMU → service (atomic, ring buffer) → module (thread 
   `Event::buffer` lấy từ **pool tĩnh** khai báo ở `setup_buffers()` (64 B×32, 128 B×64, 256 B×16, 1024 B×16);
   payload inline giữ mặc định 16 B. Hết pool → gói đó bị bỏ và được đếm (`sys buffers`, `gnss`).
   Bộ đệm của phần cứng mô phỏng và port `linux_cpu` cũng là mảng cố định.
-- **Stack**: 17 task lấy stack từ vùng tĩnh `EP_CFG_STACK_POOL_BYTES` = 48 KB (dùng ~41 KB), `EP_CFG_MAX_THREADS` = 24.
-- **Priority** (0..15, `product.cpp`): IMU 12 · cổng GNSS 10 · kênh giao diện 9 · nghiệp vụ `app` 8 · cổng loopback 5 ·
-  console 4 · LED 4. Xem lúc chạy: `sys tasks`.
+- **Stack**: 18 task lấy stack từ vùng tĩnh `EP_CFG_STACK_POOL_BYTES` = 56 KB (dùng ~45 KB), `EP_CFG_MAX_THREADS` = 24.
+- **Priority** (0..15, `product.cpp`): IMU 12 · cổng GNSS 10 · kênh giao diện (serial + UDP) 9 · nghiệp vụ `app` 8 · cổng loopback 5 ·
+  console 4 · LED 4. Xem lúc chạy: `sys tasks`. Trên target `linux_cpu` priority là SCHED_FIFO thật
+  (`EP_POSIX_REALTIME`; cần root hoặc `setcap cap_sys_nice+ep firmware`, không có quyền thì chạy SCHED_OTHER).
+
+> Framework có hai giao thức MAVLink: `communication/mavlink/` (v1, bảng ánh xạ telemetry `NAMED_VALUE_FLOAT`, dùng bởi
+> thermo_pro) và `communication/mavlink2/` (v2 + dialect). Sản phẩm này cần v2 vì bản tin riêng có msgid 62000–62004
+> (v1 chỉ có msgid 8 bit) và dùng `SERIAL_CONTROL`, nên chỉ link `ep_proto_mavlink2`.
 
 ## Giao diện MAVLink
 
@@ -71,7 +77,7 @@ Lệnh GNSS chỉ được gửi khi máy thu ở trạng thái CONNECTED (ngư�
 | `gnss.forward` | 1 | chuyển tiếp dữ liệu máy thu lên giao diện |
 | `io.report_ms` | 200 | chu kỳ `IO_STATUS` khi không đổi |
 | `imu.rate_hz` / `imu.timeout_ms` | 10 / 500 | tần số gửi `IMU_DATA` / ngưỡng báo mất dữ liệu |
-| `comm.console`, `comm.gcs` | cli, mavlink | giao thức trên từng kênh (`link set gcs cli` để dùng terminal trên cổng giao diện) |
+| `comm.console`, `comm.gcs`, `comm.gcs_udp` | cli, mavlink, mavlink | giao thức trên từng kênh (`link set gcs cli` để dùng terminal trên cổng giao diện) |
 
 ## Loopback serial
 
@@ -107,6 +113,14 @@ cmake --build build-bringup -j && ctest --test-dir build-bringup --output-on-fai
 ```
 ```bash
 tools/mavlink/bringup_gcs.py monitor
+```
+
+Phần mềm giao diện cũng kết nối được qua mạng (kênh `gcs_udp`, cổng `kGcsUdpPort` = 14560 trong `bringup_config.hpp`;
+firmware trả lời địa chỉ gửi gần nhất, nên phía giao diện gửi HEARTBEAT trước). QGroundControl: thêm UDP link với
+server `<ip-bo-mạch>:14560`. Telemetry được gửi trên mọi kênh MAVLink đang hoạt động:
+
+```bash
+tools/mavlink/bringup_gcs.py --udp 127.0.0.1:14560 monitor
 ```
 
 Kịch bản mô phỏng: `EP_SIM_SERIAL1=loop` (không có máy thu → loopback PASS sau 5 s), `EP_SIM_SERIAL1=gnss:7000`

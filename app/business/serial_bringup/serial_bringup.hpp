@@ -26,7 +26,7 @@ public:
     core::Status on_init(SystemContext& ctx) override;
     core::Status on_start() override;
     void on_stop() override;
-    void on_event(const svc::Event& e) override;
+    void on_event(const msg::Event& e) override;
     std::uint32_t tick_period_ms() const override { return 20; }
     void on_tick(std::uint64_t now_ms) override;
 

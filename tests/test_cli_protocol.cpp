@@ -20,7 +20,7 @@ std::size_t feed(comm::IProtocol& p, const char* text) {
 }  // namespace
 
 TEST(cli_protocol_line_editing_and_dispatch) {
-    svc::EventBus bus;
+    msg::EventBus bus;
     svc::ParamStore params;
     svc::CommandService commands;
     comm::Services services{bus, params, commands};

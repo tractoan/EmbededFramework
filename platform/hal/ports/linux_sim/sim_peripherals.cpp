@@ -34,30 +34,6 @@ Status SimGpio::write(bool level) {
     return Status::Ok;
 }
 
-// ------------------------------------------------------------------ UART
-Status SimConsoleUart::open(const UartConfig& /*cfg*/) { return Status::Ok; }
-
-std::size_t SimConsoleUart::write(const std::uint8_t* data, std::size_t len, std::uint32_t /*timeout_ms*/) {
-    const ssize_t n = ::write(STDOUT_FILENO, data, len);
-    return n > 0 ? static_cast<std::size_t>(n) : 0;
-}
-
-std::size_t SimConsoleUart::read(std::uint8_t* data, std::size_t len, std::uint32_t timeout_ms) {
-    if (eof_) {   // stdin đã đóng: mô phỏng UART im lặng
-        std::this_thread::sleep_for(std::chrono::milliseconds(timeout_ms));
-        return 0;
-    }
-    pollfd pfd{STDIN_FILENO, POLLIN, 0};
-    const int wait = timeout_ms > 60000u ? 60000 : static_cast<int>(timeout_ms);
-    if (::poll(&pfd, 1, wait) <= 0) return 0;
-    const ssize_t n = ::read(STDIN_FILENO, data, len);
-    if (n <= 0) {
-        eof_ = true;
-        return 0;
-    }
-    return static_cast<std::size_t>(n);
-}
-
 // -------------------------------------------------------------- UDP UART
 static_assert(sizeof(sockaddr_in) <= 16, "peer storage too small");
 
@@ -149,50 +125,6 @@ Status SimI2c::write_read(std::uint8_t addr, const std::uint8_t* tx, std::size_t
                           std::size_t rx_len, std::uint32_t timeout_ms) {
     const Status st = write(addr, tx, tx_len, timeout_ms);
     return core::is_ok(st) ? read(addr, rx, rx_len, timeout_ms) : st;
-}
-
-// --------------------------------------------------------------- Storage
-SimFileStorage::SimFileStorage(std::size_t size) : size_(size) {
-    const char* env = std::getenv("EP_SIM_NVRAM");
-    path_ = env ? env : "ep_nvram.bin";
-}
-
-Status SimFileStorage::read(std::size_t offset, void* data, std::size_t len) {
-    if (offset + len > size_) return Status::OutOfRange;
-    std::memset(data, 0xFF, len);   // vùng chưa ghi = trạng thái erased của Flash
-    if (FILE* f = std::fopen(path_.c_str(), "rb")) {
-        if (std::fseek(f, static_cast<long>(offset), SEEK_SET) == 0) (void)std::fread(data, 1, len, f);
-        std::fclose(f);
-    }
-    return Status::Ok;
-}
-
-Status SimFileStorage::write(std::size_t offset, const void* data, std::size_t len) {
-    if (offset + len > size_) return Status::OutOfRange;
-    FILE* f = std::fopen(path_.c_str(), "r+b");
-    if (f == nullptr) {
-        if (!core::is_ok(erase())) return Status::Error;
-        f = std::fopen(path_.c_str(), "r+b");
-        if (f == nullptr) return Status::Error;
-    }
-    const bool ok = std::fseek(f, static_cast<long>(offset), SEEK_SET) == 0 && std::fwrite(data, 1, len, f) == len;
-    std::fclose(f);
-    return ok ? Status::Ok : Status::Error;
-}
-
-Status SimFileStorage::erase() {
-    FILE* f = std::fopen(path_.c_str(), "wb");
-    if (f == nullptr) return Status::Error;
-    std::uint8_t blank[256];   // không cấp phát động: ghi từng khối 0xFF
-    std::memset(blank, 0xFF, sizeof(blank));
-    bool ok = true;
-    for (std::size_t done = 0; ok && done < size_;) {
-        const std::size_t n = size_ - done < sizeof(blank) ? size_ - done : sizeof(blank);
-        ok = std::fwrite(blank, 1, n, f) == n;
-        done += n;
-    }
-    std::fclose(f);
-    return ok ? Status::Ok : Status::Error;
 }
 
 }  // namespace hal::sim

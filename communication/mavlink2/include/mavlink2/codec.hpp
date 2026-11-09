@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <cstring>
 
-namespace mavlink {
+namespace mavlink2 {
 
 inline constexpr std::uint8_t kStxV1        = 0xFE;
 inline constexpr std::uint8_t kStxV2        = 0xFD;
@@ -111,4 +111,4 @@ inline float get_f32(const std::uint8_t* p, std::size_t off) {
 }
 }  // namespace wire
 
-}  // namespace mavlink
+}  // namespace mavlink2

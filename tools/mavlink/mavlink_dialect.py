@@ -159,7 +159,7 @@ class Codec:
 def check():
     """So CRC_EXTRA / độ dài trong mã C++ với giá trị tính từ XML."""
     defs = bringup_defs()
-    files = [os.path.join(ROOT, 'communication/mavlink/include/mavlink/common.hpp'),
+    files = [os.path.join(ROOT, 'communication/mavlink2/include/mavlink2/common.hpp'),
              os.path.join(ROOT, 'products/hw_bringup/bringup_messages.hpp')]
     pat = re.compile(r'kId = (\d+);\s*static constexpr std::uint8_t kCrcExtra = (\d+);\s*'
                      r'static constexpr std::size_t kLen = (\d+);')

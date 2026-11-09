@@ -1,255 +1,257 @@
-// MAVLink: codec so với khung sinh bởi pymavlink (golden), tách khung bền vững, giao thức tham số/lệnh.
-#include "comm/cli_protocol.hpp"
-#include "comm/link_manager.hpp"
+// MAVLink v1: codec (khung, CRC, tái đồng bộ) và giao thức (heartbeat, param, command, telemetry).
+#include <cstring>
+#include <vector>
+
 #include "mavlink/mavlink_protocol.hpp"
 #include "mocks.hpp"
 #include "test_framework.hpp"
 
 namespace {
+using namespace mavlink;
 
-bool std_lookup(std::uint32_t id, std::uint8_t& extra, const void*) { return mavlink::MavlinkProtocol::standard_crc_extra(id, extra); }
-
-std::vector<mavlink::Message> parse_all(const std::vector<std::uint8_t>& bytes) {
-    mavlink::Parser p(&std_lookup, nullptr);
-    std::vector<mavlink::Message> out;
-    p.feed(bytes.data(), bytes.size(), [&](const mavlink::Message& m) { out.push_back(m); });
-    return out;
-}
-
-template <typename M>
-std::vector<std::uint8_t> frame(const M& m, std::uint8_t seq, std::uint8_t sys, std::uint8_t comp) {
-    std::uint8_t payload[M::kLen]{};
-    m.pack(payload);
-    std::uint8_t out[mavlink::kMaxFrame];
-    const std::size_t n = mavlink::encode(out, sizeof(out), seq, sys, comp, M::kId, M::kCrcExtra, payload, M::kLen);
+std::vector<std::uint8_t> frame(std::uint8_t id, const std::vector<std::uint8_t>& payload, std::uint8_t sysid = 255,
+                                std::uint8_t compid = 190, std::uint8_t seq = 0) {
+    std::uint8_t out[kMaxFrame];
+    const std::size_t n = encode(out, seq, sysid, compid, id, payload.data(), payload.size());
     return std::vector<std::uint8_t>(out, out + n);
 }
 
-// Dialect thử: ghi lại bản tin/lệnh, đẩy event 0x3001 thành STATUSTEXT
-struct TestDialect final : mavlink::IDialect {
-    void on_event(const svc::Event& e, mavlink::Sender& tx) override {
-        if (e.id != 0x3001) return;
-        mavlink::StatusText t;
-        std::strcpy(t.text, "hello");
-        tx.send(t);
+struct Decoded {
+    std::uint8_t sysid, compid, msgid;
+    std::vector<std::uint8_t> payload;
+};
+std::vector<Decoded> decode_all(const std::vector<std::uint8_t>& bytes) {
+    std::vector<Decoded> out;
+    Parser p;
+    p.feed(bytes.data(), bytes.size(),
+           [](void* ctx, const Frame& f) {
+               static_cast<std::vector<Decoded>*>(ctx)->push_back(
+                   Decoded{f.sysid, f.compid, f.msgid, std::vector<std::uint8_t>(f.payload, f.payload + f.len)});
+           },
+           &out);
+    return out;
+}
+std::vector<Decoded> only(const std::vector<Decoded>& v, std::uint8_t id) {
+    std::vector<Decoded> r;
+    for (const auto& d : v) {
+        if (d.msgid == id) r.push_back(d);
     }
-    void on_message(const mavlink::Message& m, comm::Services&, mavlink::Sender&) override { last_msg = m.msgid; }
-    bool crc_extra(std::uint32_t id, std::uint8_t& out) const override {
-        if (id != 62003) return false;
-        out = 2;
-        return true;
-    }
-    std::uint8_t on_command(const mavlink::CommandLong& c, comm::Services&, mavlink::Sender&) override {
-        last_cmd = c.command;
-        return mavlink::MAV_RESULT_ACCEPTED;
-    }
-    std::atomic<std::uint32_t> last_msg{0};
-    std::atomic<std::uint16_t> last_cmd{0};
+    return r;
+}
+std::vector<std::uint8_t> param_id(const char* s) {
+    std::vector<std::uint8_t> v(16, 0);
+    for (std::size_t i = 0; s[i] && i < 16; ++i) v[i] = static_cast<std::uint8_t>(s[i]);
+    return v;
+}
+std::vector<std::uint8_t> f32(float f) {
+    std::vector<std::uint8_t> v(4);
+    put_f32(v.data(), f);
+    return v;
+}
+std::vector<std::uint8_t> cat(std::initializer_list<std::vector<std::uint8_t>> parts) {
+    std::vector<std::uint8_t> r;
+    for (const auto& p : parts) r.insert(r.end(), p.begin(), p.end());
+    return r;
+}
+
+// ---- bản đồ thử nghiệm
+constexpr msg::EventId kTempEvt = 0x3400, kStateEvt = 0x3401, kAckEvt = 0x3402;
+bool temp_value(const msg::Event& e, float& v) {
+    std::int32_t d = 0;
+    if (!e.get(d)) return false;
+    v = d / 10.0f;
+    return true;
+}
+bool state_text(const msg::Event& e, std::uint8_t& sev, char* text, std::size_t n) {
+    std::uint8_t s = 0;
+    if (!e.get(s)) return false;
+    sev = s ? mav::kSeverityCritical : mav::kSeverityInfo;
+    std::snprintf(text, n, "state %u", static_cast<unsigned>(s));
+    return true;
+}
+bool state_mav(const msg::Event& e, std::uint8_t& out) {
+    std::uint8_t s = 0;
+    if (!e.get(s)) return false;
+    out = s ? mav::kStateCritical : mav::kStateActive;
+    return true;
+}
+std::uint8_t ack_cmd(comm::Services& s, const float (&p)[7]) {
+    if (p[0] != 1.0f) return mav::kResultDenied;
+    s.bus.publish(msg::Event::make(kAckEvt));
+    return mav::kResultAccepted;
+}
+const Telemetry kTm[]   = {{kTempEvt, "temp", &temp_value}};
+const StatusText kSt[]  = {{kStateEvt, &state_text}};
+const SystemState kSs[] = {{kStateEvt, &state_mav}};
+const Command kCmd[]    = {{mav::kCmdUser1, &ack_cmd}};
+const Map kMap{7, 191, mav::kTypeOnboardController, 1000, kTm, 1, kSt, 1, kSs, 1, kCmd, 1};
+
+const svc::ParamDef kDefs[] = {
+    {0x3501, "alarm.high", 750, -400, 1500, ""},
+    {0x3502, "temp.period_ms", 500, 100, 60000, ""},
+    {0x3503, "a_long_name_16ch", 1, 0, 9, ""},   // đúng 16 ký tự: không có '\0' trong khung
 };
 
+struct Fixture {
+    msg::EventBus bus;
+    svc::ParamStore params;
+    svc::CommandService commands;
+    comm::Services services{bus, params, commands};
+    mock::ScriptedStream io;
+    mock::Recorder rec;
+    MavlinkV1Protocol mav{kMap};
+    Fixture() {
+        params.init(nullptr, &bus);
+        params.register_params(kDefs, 3);
+        bus.subscribe(kAckEvt, &rec);
+        mav.attach(io, services);
+    }
+    std::vector<Decoded> exchange(const std::vector<std::uint8_t>& in) {
+        io.clear_tx();
+        mav.on_rx(in.data(), in.size());
+        return decode_all(io.tx());
+    }
+};
 }  // namespace
 
-TEST(mavlink_encode_matches_pymavlink) {
-    mavlink::Heartbeat hb;
-    hb.type = 18; hb.autopilot = 8; hb.system_status = 4;
-    const std::vector<std::uint8_t> golden = {0xFD, 0x09, 0x00, 0x00, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00,
-                                              0x00, 0x00, 0x00, 0x12, 0x08, 0x00, 0x04, 0x03, 0x16, 0xD2};
-    CHECK(frame(hb, 0, 1, 1) == golden);
+TEST(mavlink_codec_roundtrip_and_layout) {
+    const std::vector<std::uint8_t> hb = {0, 0, 0, 0, 18, 8, 0, 4, 3};
+    const auto f = frame(msgid::kHeartbeat, hb, 1, 191, 42);
+    CHECK_EQ(f.size(), 6u + 9u + 2u);
+    CHECK(f[0] == 0xFE && f[1] == 9 && f[2] == 42 && f[3] == 1 && f[4] == 191 && f[5] == 0);
+    CHECK(is_valid_frame(f.data(), f.size()));
+    auto bad = f;
+    bad[8] ^= 0x01;   // 1 bit trong payload
+    CHECK(!is_valid_frame(bad.data(), bad.size()));
 
-    // COMMAND_LONG có byte 0 ở cuối -> bị cắt (len 32), giống pymavlink
-    const std::vector<std::uint8_t> cmd = {0xFD, 0x20, 0x00, 0x00, 0x03, 0xFF, 0xBE, 0x4C, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3F,
-                                           0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                                           0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF5, 0x00, 0x01, 0x01,
-                                           0xF0, 0x0A};
-    mavlink::CommandLong c;
-    c.target_system = 1; c.target_component = 1; c.command = 245; c.param[0] = 1.0f;
-    CHECK(frame(c, 3, 255, 190) == cmd);
+    std::uint8_t out[kMaxFrame];
+    CHECK_EQ(encode(out, 0, 1, 1, 99, hb.data(), hb.size()), 0u);                       // msgid không có trong bảng
+    CHECK_EQ(encode(out, 0, 1, 1, msgid::kHeartbeat, hb.data(), 8), 0u);                 // độ dài sai
+    CHECK(find_message(msgid::kParamValue)->length == 25 && find_message(msgid::kCommandLong)->crc_extra == 152);
 
-    const auto msgs = parse_all(cmd);
-    CHECK_EQ(msgs.size(), 1u);
-    if (msgs.size() == 1) {
-        const auto back = mavlink::CommandLong::unpack(msgs[0].payload);   // payload đã mở rộng 0
-        CHECK_EQ(back.command, 245);
-        CHECK(back.param[0] == 1.0f && back.confirmation == 0);
-        CHECK_EQ(msgs[0].sysid, 255);
-        CHECK_EQ(msgs[0].seq, 3);
-    }
+    const auto d = decode_all(f);
+    CHECK(d.size() == 1 && d[0].msgid == 0 && d[0].payload == hb);
 }
 
-TEST(mavlink_parser_resync_and_errors) {
-    mavlink::Heartbeat hb;
-    auto good = frame(hb, 1, 1, 1);
-    auto bad  = good;
-    bad[12] ^= 0x40;   // hỏng payload -> sai CRC
+TEST(mavlink_parser_resyncs_through_garbage) {
+    const auto a = frame(msgid::kParamRequestList, {7, 0});
+    const auto b = frame(msgid::kCommandAck, {1, 2, 3});
+    auto corrupt = frame(msgid::kParamRequestList, {7, 0});
+    corrupt.back() ^= 0xFF;
+    std::vector<std::uint8_t> stream = {0x00, 0xFE, 0x02};   // rác + STX giả
+    stream.insert(stream.end(), a.begin(), a.end());
+    stream.insert(stream.end(), corrupt.begin(), corrupt.end());
+    stream.insert(stream.end(), b.begin(), b.end());
 
-    std::vector<std::uint8_t> stream = {0x00, 0xFD, 0x55, 0xAA};   // rác (có cả byte STX giả)
-    stream.insert(stream.end(), bad.begin(), bad.end());
-    stream.insert(stream.end(), good.begin(), good.end());
-
-    // khung v1 (STX 0xFE): heartbeat, CRC tính trên header v1
-    const std::uint8_t v1_body[] = {0x09, 0x05, 0x02, 0x03, 0x00, 0, 0, 0, 0, 6, 8, 0, 4, 3};
-    std::uint16_t crc = utils::crc16_mcrf4xx(v1_body, sizeof(v1_body));
-    const std::uint8_t extra = 50;
-    crc = utils::crc16_mcrf4xx(&extra, 1, crc);
-    stream.push_back(0xFE);
-    stream.insert(stream.end(), v1_body, v1_body + sizeof(v1_body));
-    stream.push_back(static_cast<std::uint8_t>(crc));
-    stream.push_back(static_cast<std::uint8_t>(crc >> 8));
-
-    // khung có chữ ký (13 byte sau CRC) -> nhận, bỏ qua chữ ký
-    auto signed_frame = good;
-    signed_frame[2] = mavlink::kIncompatSigned;
-    std::uint16_t c2 = utils::crc16_mcrf4xx(signed_frame.data() + 1, signed_frame.size() - 3);
-    c2 = utils::crc16_mcrf4xx(&extra, 1, c2);
-    signed_frame[signed_frame.size() - 2] = static_cast<std::uint8_t>(c2);
-    signed_frame[signed_frame.size() - 1] = static_cast<std::uint8_t>(c2 >> 8);
-    signed_frame.insert(signed_frame.end(), 13, 0x11);
-    stream.insert(stream.end(), signed_frame.begin(), signed_frame.end());
-
-    // Khung hợp lệ bị "che" bởi STX giả: header giả nuốt phần đầu khung thật -> phải quét lại
-    const auto hidden = frame(hb, 9, 4, 4);
-    stream.push_back(0xFD);
-    stream.push_back(0x05);   // len giả = 5 (header giả bị loại vì cờ incompat sai)
-    stream.insert(stream.end(), hidden.begin(), hidden.end());
-
-    mavlink::Parser p(&std_lookup, nullptr);
-    std::vector<mavlink::Message> got;
-    p.feed(stream.data(), stream.size(), [&](const mavlink::Message& m) { got.push_back(m); });
-    CHECK_EQ(got.size(), 4u);
-    CHECK(p.crc_errors() >= 1u);
-    if (got.size() == 4) {
-        CHECK_EQ(got[0].seq, 1);
-        CHECK_EQ(got[1].version, 1);
-        CHECK_EQ(got[1].sysid, 2);
-        CHECK_EQ(mavlink::Heartbeat::unpack(got[1].payload).type, 6);
-        CHECK_EQ(got[3].sysid, 4);
-        CHECK_EQ(got[3].seq, 9);
+    std::vector<Decoded> got;
+    Parser p;
+    for (std::uint8_t byte : stream) {   // đưa từng byte: khung bị chia nhỏ tối đa
+        p.feed(&byte, 1, [](void* ctx, const Frame& f) { static_cast<std::vector<Decoded>*>(ctx)->push_back({f.sysid, f.compid, f.msgid, {}}); }, &got);
     }
+    CHECK_EQ(got.size(), 2u);
+    CHECK(got.size() == 2 && got[0].msgid == msgid::kParamRequestList && got[1].msgid == msgid::kCommandAck);
+    CHECK(p.rejected() >= 1);
 }
 
-TEST(mavlink_protocol_params_commands_and_events) {
-    svc::EventBus bus;
-    svc::ParamStore params;
-    mock::Storage nv;
-    params.init(&nv, &bus);
-    const svc::ParamDef defs[] = {{0x3101, "imu.rate_hz", 10, 1, 100, "Hz"}, {0x3102, "x.long_name_here_ok", 5, 0, 9, ""}};
-    params.register_params(defs, 2);
-    svc::CommandService commands;
-    comm::Services services{bus, params, commands};
+TEST(mavlink_heartbeat_and_system_state) {
+    Fixture f;
+    f.mav.poll(1000);
+    auto hb = only(decode_all(f.io.tx()), msgid::kHeartbeat);
+    CHECK(hb.size() == 1 && hb[0].sysid == 7 && hb[0].compid == 191);
+    CHECK(hb.size() == 1 && hb[0].payload[4] == mav::kTypeOnboardController && hb[0].payload[7] == mav::kStateActive &&
+          hb[0].payload[8] == 3);
 
-    TestDialect dialect;
-    mavlink::MavlinkProtocol mav(dialect);
-    mock::ScriptedStream io;
-    CHECK(core::is_ok(mav.attach(io, services)));
-
-    auto rx = [&](const std::vector<std::uint8_t>& f) { mav.on_rx(f.data(), f.size()); };
-    auto sent = [&]() { return parse_all(io.tx()); };
-
-    // Heartbeat định kỳ
-    mav.poll(1000);
-    auto out = sent();
-    CHECK(out.size() == 1 && out[0].msgid == mavlink::Heartbeat::kId && out[0].sysid == 1);
-
-    // GCS heartbeat -> connected
-    mavlink::Heartbeat gcs_hb;
-    gcs_hb.type = mavlink::MAV_TYPE_GCS;
-    rx(frame(gcs_hb, 0, 255, 190));
-    CHECK(mav.gcs_connected());
-
-    // PARAM_REQUEST_LIST -> 2 PARAM_VALUE (tên dài bị cắt 16 ký tự)
-    io.clear_tx();
-    std::uint8_t req[2] = {1, 1};
-    std::uint8_t f[64];
-    std::size_t n = mavlink::encode(f, sizeof(f), 1, 255, 190, mavlink::ParamRequestList::kId, mavlink::ParamRequestList::kCrcExtra, req, 2);
-    rx(std::vector<std::uint8_t>(f, f + n));
-    mav.poll(1010);
-    out = sent();
-    CHECK_EQ(out.size(), 2u);
-    if (out.size() == 2) {
-        CHECK(std::strncmp(reinterpret_cast<const char*>(out[0].payload + 8), "imu.rate_hz", 16) == 0);
-        CHECK(std::strncmp(reinterpret_cast<const char*>(out[1].payload + 8), "x.long_name_here", 16) == 0);
-        CHECK(mavlink::wire::get_f32(out[0].payload, 0) == 10.0f);
-        CHECK_EQ(mavlink::wire::get_u16(out[0].payload, 4), 2);
-    }
-
-    // PARAM_SET (trong miền / ngoài miền) -> luôn trả PARAM_VALUE với giá trị hiện tại
-    std::uint8_t ps[mavlink::ParamSet::kLen]{};
-    mavlink::wire::put_f32(ps, 0, 25.0f);
-    ps[4] = 1; ps[5] = 1;
-    std::memcpy(ps + 6, "imu.rate_hz", 11);
-    ps[22] = mavlink::MAV_PARAM_TYPE_INT32;
-    io.clear_tx();
-    n = mavlink::encode(f, sizeof(f), 2, 255, 190, mavlink::ParamSet::kId, mavlink::ParamSet::kCrcExtra, ps, sizeof(ps));
-    rx(std::vector<std::uint8_t>(f, f + n));
-    CHECK_EQ(params.get_or(0x3101, 0), 25);
-    mavlink::wire::put_f32(ps, 0, 1000.0f);
-    n = mavlink::encode(f, sizeof(f), 3, 255, 190, mavlink::ParamSet::kId, mavlink::ParamSet::kCrcExtra, ps, sizeof(ps));
-    rx(std::vector<std::uint8_t>(f, f + n));
-    CHECK_EQ(params.get_or(0x3101, 0), 25);
-    out = sent();
-    CHECK(out.size() == 2 && mavlink::wire::get_f32(out[1].payload, 0) == 25.0f);
-
-    // COMMAND_LONG: PREFLIGHT_STORAGE (giao thức xử lý) + lệnh khác (chuyển cho dialect) -> COMMAND_ACK
-    io.clear_tx();
-    mavlink::CommandLong c;
-    c.target_system = 1; c.command = mavlink::MAV_CMD_PREFLIGHT_STORAGE; c.param[0] = 1;
-    rx(frame(c, 4, 255, 190));
-    c.command = mavlink::MAV_CMD_DO_SET_RELAY;
-    rx(frame(c, 5, 255, 190));
-    c.target_system = 9;   // không phải gửi cho mình -> bỏ qua
-    rx(frame(c, 6, 255, 190));
-    out = sent();
-    CHECK_EQ(out.size(), 2u);
-    if (out.size() == 2) {
-        CHECK_EQ(mavlink::wire::get_u16(out[0].payload, 0), mavlink::MAV_CMD_PREFLIGHT_STORAGE);
-        CHECK_EQ(out[0].payload[2], mavlink::MAV_RESULT_ACCEPTED);
-        CHECK_EQ(out[1].payload[8], 255);   // ACK gửi về đúng GCS
-    }
-    CHECK_EQ(dialect.last_cmd.load(), mavlink::MAV_CMD_DO_SET_RELAY);
-    CHECK(nv.mem[0] != 0xFF);   // đã ghi NV (save)
-
-    // Bản tin riêng của dialect (CRC_EXTRA do dialect cung cấp)
-    std::uint8_t os[10] = {0x00, 0x0C, 0, 0, 0x00, 0x04, 0, 0, 1, 1};
-    n = mavlink::encode(f, sizeof(f), 7, 255, 190, 62003, 2, os, sizeof(os));
-    rx(std::vector<std::uint8_t>(f, f + n));
-    CHECK_EQ(dialect.last_msg.load(), 62003u);
-
-    // Event miền -> bản tin (qua dialect), probe nhận dạng khung hợp lệ
-    io.clear_tx();
-    bus.publish(svc::Event::make(0x3001));
-    out = sent();
-    CHECK(out.size() == 1 && out[0].msgid == mavlink::StatusText::kId);
-    const auto hb_frame = frame(gcs_hb, 0, 255, 190);
-    CHECK(mav.probe(hb_frame.data(), hb_frame.size()));
-    CHECK(!mav.probe(hb_frame.data(), hb_frame.size() - 1));
-
-    mav.detach();
-    io.clear_tx();
-    bus.publish(svc::Event::make(0x3001));
-    CHECK(io.tx().empty());
+    f.io.clear_tx();
+    f.bus.publish(msg::Event::make(kStateEvt, std::uint8_t{1}));   // trạng thái nghiêm trọng
+    f.mav.poll(1500);                                              // chưa tới chu kỳ
+    CHECK(only(decode_all(f.io.tx()), msgid::kHeartbeat).empty());
+    f.mav.poll(2000);
+    hb = only(decode_all(f.io.tx()), msgid::kHeartbeat);
+    CHECK(hb.size() == 1 && hb[0].payload[7] == mav::kStateCritical);
+    auto txt = only(decode_all(f.io.tx()), msgid::kStatustext);
+    CHECK(txt.size() == 1 && txt[0].payload[0] == mav::kSeverityCritical &&
+          std::memcmp(txt[0].payload.data() + 1, "state 1", 7) == 0);
 }
 
-TEST(mavlink_auto_detect_on_link) {
-    svc::EventBus bus;
-    svc::ParamStore params;
-    params.init(nullptr, &bus);
-    svc::CommandService commands;
-    comm::Services services{bus, params, commands};
-    comm::LinkManager links;
-    links.init(services);
+TEST(mavlink_param_protocol_bridges_param_store) {
+    Fixture f;
+    // PARAM_REQUEST_LIST -> PARAM_VALUE cho mọi tham số, gửi dần trong poll()
+    f.exchange(frame(msgid::kParamRequestList, {7, 191}));
+    f.io.clear_tx();
+    for (int i = 0; i < 3; ++i) f.mav.poll(10);
+    auto values = only(decode_all(f.io.tx()), msgid::kParamValue);
+    CHECK_EQ(values.size(), 3u);
+    if (values.size() == 3) {
+        CHECK(get_f32(values[0].payload.data()) == 750.0f);
+        CHECK(get_u16(values[0].payload.data() + 4) == 3 && get_u16(values[2].payload.data() + 6) == 2);
+        CHECK(str_equals(values[0].payload.data() + 8, 16, "alarm.high"));
+        CHECK(str_equals(values[2].payload.data() + 8, 16, "a_long_name_16ch"));
+        CHECK(values[0].payload[24] == mav::kParamTypeReal32);
+    }
 
-    TestDialect dialect;
-    mavlink::MavlinkProtocol mav(dialect);
-    comm::CliProtocol cli(false, "> ");
-    mock::ScriptedStream port;
-    CHECK(core::is_ok(links.add_channel("gcs", &port, {&mav, &cli}, comm::proto::kAuto, osal::Priority::Normal, 1024)));
-    CHECK(core::is_ok(links.start()));
+    // PARAM_REQUEST_READ theo tên (index = -1) và theo chỉ số
+    auto r = only(f.exchange(frame(msgid::kParamRequestRead, cat({{0xFF, 0xFF, 7, 191}, param_id("temp.period_ms")}))), msgid::kParamValue);
+    CHECK(r.size() == 1 && get_f32(r[0].payload.data()) == 500.0f);
+    r = only(f.exchange(frame(msgid::kParamRequestRead, cat({{2, 0, 7, 191}, param_id("")}))), msgid::kParamValue);
+    CHECK(r.size() == 1 && get_u16(r[0].payload.data() + 6) == 2);
 
-    mavlink::Heartbeat hb;
-    auto f = frame(hb, 0, 255, 190);
-    f.insert(f.begin(), {0x13, 0x37});   // rác trước khung
-    port.feed(f);
-    CHECK(mock::wait_until([&] { return std::string(links.active_protocol(0)) == "mavlink"; }));
-    CHECK(mock::wait_until([&] { return mav.gcs_connected(); }));
-    links.stop();
+    // PARAM_SET: hợp lệ -> ParamStore đổi; ngoài miền -> giữ nguyên; cả hai đều trả giá trị hiện tại
+    r = only(f.exchange(frame(msgid::kParamSet, cat({f32(700.4f), {7, 191}, param_id("alarm.high"), {9}}))), msgid::kParamValue);
+    CHECK_EQ(f.params.get_or(0x3501, 0), 700);
+    CHECK(r.size() == 1 && get_f32(r[0].payload.data()) == 700.0f);
+    r = only(f.exchange(frame(msgid::kParamSet, cat({f32(99999.0f), {7, 191}, param_id("alarm.high"), {9}}))), msgid::kParamValue);
+    CHECK_EQ(f.params.get_or(0x3501, 0), 700);
+    CHECK(r.size() == 1 && get_f32(r[0].payload.data()) == 700.0f);
+
+    // Gửi cho hệ thống khác / tham số không tồn tại -> không phản hồi
+    CHECK(f.exchange(frame(msgid::kParamSet, cat({f32(1.0f), {9, 191}, param_id("alarm.high"), {9}}))).empty());
+    CHECK(f.exchange(frame(msgid::kParamSet, cat({f32(1.0f), {7, 191}, param_id("nope"), {9}}))).empty());
+}
+
+TEST(mavlink_command_long_and_telemetry) {
+    Fixture f;
+    auto cmd = [](std::uint16_t c, float p1) {
+        std::vector<std::uint8_t> v = f32(p1);
+        for (int i = 1; i < 7; ++i) {
+            auto z = f32(0);
+            v.insert(v.end(), z.begin(), z.end());
+        }
+        v.push_back(static_cast<std::uint8_t>(c));
+        v.push_back(static_cast<std::uint8_t>(c >> 8));
+        v.insert(v.end(), {7, 191, 0});
+        return frame(msgid::kCommandLong, v);
+    };
+    auto ack = only(f.exchange(cmd(mav::kCmdUser1, 1.0f)), msgid::kCommandAck);
+    CHECK(ack.size() == 1 && get_u16(ack[0].payload.data()) == mav::kCmdUser1 && ack[0].payload[2] == mav::kResultAccepted);
+    CHECK_EQ(f.rec.count(kAckEvt), 1u);
+    ack = only(f.exchange(cmd(mav::kCmdUser1, 0.0f)), msgid::kCommandAck);
+    CHECK(ack.size() == 1 && ack[0].payload[2] == mav::kResultDenied);
+    ack = only(f.exchange(cmd(400, 0.0f)), msgid::kCommandAck);   // lệnh không có trong bảng
+    CHECK(ack.size() == 1 && ack[0].payload[2] == mav::kResultUnsupported);
+
+    f.io.clear_tx();
+    f.bus.publish(msg::Event::make(kTempEvt, std::int32_t{-123}));
+    auto tm = only(decode_all(f.io.tx()), msgid::kNamedValueFloat);
+    CHECK(tm.size() == 1 && get_f32(tm[0].payload.data() + 4) == -12.3f && str_equals(tm[0].payload.data() + 8, 10, "temp"));
+
+    f.mav.detach();   // sau detach: không gửi gì nữa
+    f.io.clear_tx();
+    f.bus.publish(msg::Event::make(kTempEvt, std::int32_t{1}));
+    CHECK(f.io.tx().empty());
+}
+
+TEST(mavlink_gcs_link_supervision_and_probe) {
+    Fixture f;
+    CHECK(!f.mav.gcs_connected());
+    f.mav.poll(100);
+    f.exchange(frame(msgid::kHeartbeat, {0, 0, 0, 0, 6, 8, 0, 4, 3}, 255, 190));   // HEARTBEAT của GCS
+    CHECK(f.mav.gcs_connected());
+    f.mav.poll(100 + MavlinkV1Protocol::kGcsTimeoutMs + 1000);
+    CHECK(!f.mav.gcs_connected());
+
+    const auto good = frame(msgid::kHeartbeat, {0, 0, 0, 0, 6, 8, 0, 4, 3});
+    CHECK(f.mav.probe(good.data(), good.size()));
+    CHECK(!f.mav.probe(good.data(), good.size() - 1));
+    const std::uint8_t modbus[] = {1, 3, 0, 0, 0, 1, 0x84, 0x0A};
+    CHECK(!f.mav.probe(modbus, sizeof(modbus)));
 }

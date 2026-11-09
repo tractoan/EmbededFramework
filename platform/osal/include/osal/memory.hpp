@@ -8,7 +8,7 @@
 //       - mọi lần gọi heap (operator new/malloc, nếu bộ chặn heap được link) bị coi là VI PHẠM:
 //         tăng bộ đếm và gọi HeapViolationHandler do target cài (mặc định: abort).
 //
-// Payload lớn dùng svc::Buffer + PoolAllocator: bộ nhớ là pool TĨNH, cấp/trả O(1) –
+// Payload lớn dùng msg::Buffer + PoolAllocator: bộ nhớ là pool TĨNH, cấp/trả O(1) –
 // không phải heap, được phép lúc chạy.
 #include <cstddef>
 #include <cstdint>
@@ -38,6 +38,10 @@ std::uint32_t heap_violations();
 
 // Chỉ dùng trong unit test: quay lại giai đoạn khởi động.
 void reset_startup_for_test();
+// Chỉ dùng trong unit test: trả pool stack về mức `used` đã ghi trước đó (stack_pool_stats().used),
+// để mỗi test có pool như lúc khởi động bất kể cấu hình sản phẩm. Chỉ gọi khi không còn thread nào
+// đang chạy trên stack cấp sau mốc đó.
+void release_stack_pool_for_test(std::size_t used_mark);
 
 // ---------------------------------------------------- danh sách thread đang chạy
 struct ThreadInfo {

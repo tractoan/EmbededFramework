@@ -3,6 +3,7 @@
 
 #if defined(__linux__)
 #include <pthread.h>
+#include <sched.h>
 #endif
 
 #include "osal/memory.hpp"
@@ -89,7 +90,14 @@ core::Status Thread::start(const ThreadConfig& cfg, Entry entry, void* arg) {
 #else
     (void)cfg;
 #endif
-    // Priority không áp dụng trên host (cần quyền realtime) – đủ cho mô phỏng và test.
+#if defined(EP_POSIX_REALTIME) && defined(__linux__)
+    // Linux thật (vd. APU Zynq UltraScale+): mức 0..15 -> SCHED_FIFO 10..85 (khoảng trống cho IRQ thread
+    // của kernel ở 50 và các tác vụ hệ thống). Cần CAP_SYS_NICE/root; không có quyền thì giữ SCHED_OTHER.
+    sched_param sp{};
+    sp.sched_priority = 10 + 5 * cfg.priority.level();
+    pthread_setschedparam(h_.t.native_handle(), SCHED_FIFO, &sp);
+#endif
+    // Không bật EP_POSIX_REALTIME (mô phỏng/test trên host): priority chỉ được ghi nhận để hiển thị.
     detail::register_thread(this, ThreadInfo{cfg.name ? cfg.name : "ep", cfg.priority, cfg.stack_bytes, pooled});
     return core::Status::Ok;
 }

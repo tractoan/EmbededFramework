@@ -4,9 +4,9 @@
 // – được kiểm tra chéo bởi tools/mavlink/mavlink_dialect.py.
 #include <cstring>
 
-#include "mavlink/codec.hpp"
+#include "mavlink2/codec.hpp"
 
-namespace mavlink {
+namespace mavlink2 {
 
 // Hằng số chuẩn hay dùng
 enum : std::uint8_t {
@@ -195,4 +195,4 @@ struct StatusText {
     }
 };
 
-}  // namespace mavlink
+}  // namespace mavlink2

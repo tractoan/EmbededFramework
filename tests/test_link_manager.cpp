@@ -13,7 +13,7 @@ constexpr modbus::Map kMap          = modbus::Map{1, kIn, 0, kHo, 1, kCo, 0};
 }  // namespace
 
 TEST(link_manager_switches_protocol_at_runtime) {
-    svc::EventBus bus;
+    msg::EventBus bus;
     svc::ParamStore params;
     params.init(nullptr, &bus);
     svc::CommandService commands;

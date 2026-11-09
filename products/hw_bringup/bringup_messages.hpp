@@ -3,11 +3,11 @@
 // CRC_EXTRA khớp mavgen – kiểm tra chéo bằng: python3 tools/mavlink/mavlink_dialect.py --check
 #include <cstring>
 
-#include "mavlink/codec.hpp"
+#include "mavlink2/codec.hpp"
 
-namespace product::msg {
+namespace product::mavmsg {
 
-using namespace mavlink::wire;
+using namespace mavlink2::wire;
 
 struct BringupStatus {
     static constexpr std::uint32_t kId = 62000;
@@ -106,4 +106,4 @@ struct ImuData {
     }
 };
 
-}  // namespace product::msg
+}  // namespace product::mavmsg

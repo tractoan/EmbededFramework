@@ -51,6 +51,10 @@ bool startup_complete() { return g_startup_complete.load(); }
 void set_heap_violation_handler(HeapViolationHandler handler) { g_handler.store(handler); }
 std::uint32_t heap_violations() { return g_heap_violations.load(); }
 void reset_startup_for_test() { g_startup_complete.store(false); }
+void release_stack_pool_for_test(std::size_t used_mark) {
+    CriticalSection cs;
+    if (used_mark < g_stack_used) g_stack_used = used_mark;
+}
 
 std::size_t thread_count() {
     CriticalSection cs;

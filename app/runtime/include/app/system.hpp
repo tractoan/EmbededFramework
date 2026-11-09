@@ -45,7 +45,7 @@ private:
 
     hal::IBoard& board_;
     svc::UartLogSink log_sink_;
-    svc::EventBus bus_;
+    msg::EventBus bus_;
     svc::ParamStore params_;
     svc::CommandService commands_;
     svc::ParamCli param_cli_;

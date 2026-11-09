@@ -15,6 +15,7 @@ enum class Status : std::int8_t {
     NotFound     = -7,
     OutOfRange   = -8,
     Corrupted    = -9,
+    Closed       = -10,   // kết nối/luồng đã bị đóng (phía bên kia ngắt)
 };
 
 constexpr bool is_ok(Status s) { return s == Status::Ok; }
@@ -31,6 +32,7 @@ constexpr const char* to_string(Status s) {
         case Status::NotFound:     return "NotFound";
         case Status::OutOfRange:   return "OutOfRange";
         case Status::Corrupted:    return "Corrupted";
+        case Status::Closed:       return "Closed";
     }
     return "?";
 }

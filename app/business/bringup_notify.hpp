@@ -26,7 +26,7 @@ inline void notify(SystemContext& ctx, const char* tag, Severity sev, const char
         LOGI(tag, "%s", text);
     }
     const std::size_t len = static_cast<std::size_t>(n) < kStatusTextMax ? static_cast<std::size_t>(n) : kStatusTextMax;
-    ctx.bus.publish(svc::Event::make(kStatusText, StatusHeader{sev}, svc::Buffer::copy_of(text, len)));
+    ctx.bus.publish(msg::Event::make(kStatusText, StatusHeader{sev}, msg::Buffer::copy_of(text, len)));
 }
 
 }  // namespace app::bringup

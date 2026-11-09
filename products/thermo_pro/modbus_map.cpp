@@ -10,14 +10,14 @@ namespace product {
 
 namespace {
 
-bool temperature(const svc::Event& e, std::int32_t& v) {
+bool temperature(const msg::Event& e, std::int32_t& v) {
     app::events::TemperatureSample s{};
     if (!e.get(s)) return false;
     v = s.deci_celsius;
     return true;
 }
 
-bool alarm_level(const svc::Event& e, std::int32_t& v) {
+bool alarm_level(const msg::Event& e, std::int32_t& v) {
     app::events::AlarmStateChanged a{};
     if (!e.get(a)) return false;
     v = static_cast<std::int32_t>(a.to);
@@ -25,7 +25,7 @@ bool alarm_level(const svc::Event& e, std::int32_t& v) {
 }
 
 core::Status ack_alarm(comm::Services& s, bool on) {
-    if (on) s.bus.publish(svc::Event::make(app::events::kAlarmAckRequest));
+    if (on) s.bus.publish(msg::Event::make(app::events::kAlarmAckRequest));
     return core::Status::Ok;
 }
 

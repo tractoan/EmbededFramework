@@ -3,14 +3,14 @@
 #include "test_framework.hpp"
 
 namespace {
-constexpr svc::EventId kTemp     = 0x3001;
-constexpr svc::EventId kAck      = 0x3002;
+constexpr msg::EventId kTemp     = 0x3001;
+constexpr msg::EventId kAck      = 0x3002;
 constexpr svc::ParamId kSetpoint = 0x3101;
 constexpr svc::ParamId kPeriod   = 0x3102;
 
-bool extract_i32(const svc::Event& e, std::int32_t& v) { return e.get(v); }
+bool extract_i32(const msg::Event& e, std::int32_t& v) { return e.get(v); }
 core::Status ack(comm::Services& s, bool on) {
-    if (on) s.bus.publish(svc::Event::make(kAck));
+    if (on) s.bus.publish(msg::Event::make(kAck));
     return core::Status::Ok;
 }
 
@@ -24,7 +24,7 @@ const svc::ParamDef kDefs[] = {
 };
 
 struct Fixture {
-    svc::EventBus bus;
+    msg::EventBus bus;
     svc::ParamStore params;
     svc::CommandService commands;
     comm::Services services{bus, params, commands};
@@ -48,7 +48,7 @@ struct Fixture {
 
 TEST(modbus_read_input_and_holding) {
     Fixture f;
-    f.bus.publish(svc::Event::make(kTemp, std::int32_t{-123}));   // -12.3 °C từ "nghiệp vụ"
+    f.bus.publish(msg::Event::make(kTemp, std::int32_t{-123}));   // -12.3 °C từ "nghiệp vụ"
 
     CHECK(f.transact(mock::rtu({7, 0x04, 0, 0, 0, 1})) == mock::rtu({7, 0x04, 2, 0xFF, 0x85}));
     CHECK(f.transact(mock::rtu({7, 0x03, 0, 0, 0, 2})) == mock::rtu({7, 0x03, 4, 0xFF, 0xCE, 0x03, 0xE8}));

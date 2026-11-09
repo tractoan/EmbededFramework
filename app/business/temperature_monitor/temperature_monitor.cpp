@@ -56,7 +56,7 @@ void TemperatureMonitor::apply_params() {
          static_cast<long>(offset_), static_cast<unsigned>(window_), static_cast<unsigned>(batch_n_));
 }
 
-void TemperatureMonitor::on_event(const svc::Event& e) {
+void TemperatureMonitor::on_event(const msg::Event& e) {
     svc::ParamChanged pc{};
     if (e.id == svc::evt::kParamChanged && e.get(pc) && (pc.id & 0xFF00u) == 0x1000u) apply_params();
 }
@@ -72,7 +72,7 @@ std::int32_t TemperatureMonitor::filter(std::int32_t sample) {
 
 void TemperatureMonitor::add_to_batch(std::int32_t value, std::uint64_t now_ms) {
     if (!batch_) {
-        batch_ = svc::Buffer::allocate(batch_n_ * sizeof(std::int16_t));
+        batch_ = msg::Buffer::allocate(batch_n_ * sizeof(std::int16_t));
         if (!batch_) {
             batch_failures_.fetch_add(1);
             if (!alloc_warned_) LOGW(kTag, "cannot allocate batch of %u samples", static_cast<unsigned>(batch_n_));
@@ -93,7 +93,7 @@ void TemperatureMonitor::add_to_batch(std::int32_t value, std::uint64_t now_ms) 
                                            static_cast<std::uint16_t>(period_ms_ > 0xFFFF ? 0xFFFF : period_ms_),
                                            batch_first_ms_};
         // Chuyển quyền sở hữu buffer vào Event: từ đây chỉ đọc, mọi listener dùng chung.
-        ctx_->bus.publish(svc::Event::make(events::kTemperatureBatch, hdr, std::move(batch_)));
+        ctx_->bus.publish(msg::Event::make(events::kTemperatureBatch, hdr, std::move(batch_)));
         batch_.reset();
         batches_.fetch_add(1);
     }
@@ -107,7 +107,7 @@ void TemperatureMonitor::on_tick(std::uint64_t now_ms) {
         if (++consecutive_errors_ >= cfg_.fault_threshold && !faulted_) {
             faulted_ = true;
             LOGE(kTag, "sensor fault (%s)", core::to_string(st));
-            ctx_->bus.publish(svc::Event::make(events::kSensorFault));
+            ctx_->bus.publish(msg::Event::make(events::kSensorFault));
         }
         return;
     }
@@ -115,7 +115,7 @@ void TemperatureMonitor::on_tick(std::uint64_t now_ms) {
     if (faulted_) {
         faulted_ = false;
         LOGI(kTag, "sensor recovered");
-        ctx_->bus.publish(svc::Event::make(events::kSensorRecovered));
+        ctx_->bus.publish(msg::Event::make(events::kSensorRecovered));
     }
 
     const std::int32_t value = filter(raw + offset_);
@@ -123,7 +123,7 @@ void TemperatureMonitor::on_tick(std::uint64_t now_ms) {
     has_value_  = true;
     samples_.fetch_add(1);
     LOGD(kTag, "T=%s C", utils::Fixed(value, 1).c_str());
-    ctx_->bus.publish(svc::Event::make(events::kTemperature, events::TemperatureSample{value}));
+    ctx_->bus.publish(msg::Event::make(events::kTemperature, events::TemperatureSample{value}));
     if (batch_n_ > 0) add_to_batch(value, now_ms);
 }
 

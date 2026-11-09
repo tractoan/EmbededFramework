@@ -1,11 +1,12 @@
 # Embedded Platform – Kiến trúc phần mềm nhúng C++ đa nền tảng
 
-Bộ khung firmware C++17 phân lớp rõ ràng: **Platform (Core / OSAL / HAL / Device) → Services → Communication → Application (Runtime & Business)**.
+Bộ khung firmware C++17 phân lớp rõ ràng: **Platform (Core / OSAL / HAL / Device) → Messaging → Services → Communication → Application (Runtime & Business)**.
 Mục tiêu:
 
 - **Chuyển nền tảng** (MCU, board, RTOS, Linux) mà **không sửa** code nghiệp vụ.
 - **Tùy biến nghiệp vụ** ở nhiều mức: chọn module, cấu hình lúc biên dịch, tham số lúc chạy.
-- **Đổi giao thức truyền thông linh hoạt** (CLI, Modbus RTU, MAVLink…) theo sản phẩm, lúc chạy, hoặc tự nhận dạng.
+- **Đổi giao thức truyền thông linh hoạt** (CLI, Modbus RTU, MAVLink v1…) qua UART, **TCP hoặc UDP**, theo sản phẩm,
+  lúc chạy, hoặc tự nhận dạng.
 - Phù hợp embedded: không exception, không RTTI, **không cấp phát động sau khi khởi động** (được kiểm chứng lúc chạy
   bằng bộ chặn heap), tài nguyên tĩnh, **priority của từng task cấu hình được** (16 mức, giống nhau trên mọi RTOS).
 
@@ -25,23 +26,28 @@ Mục tiêu:
 ├────────────────────────────────────────────────────────────────────────┤
 │ COMMUNICATION (communication/)  ngăn xếp truyền thông                  │
 │  link/   IByteStream · IProtocol · LinkManager (chọn/đổi giao thức)    │
-│  cli/    CliProtocol     modbus/ ModbusRtuProtocol + Map               │
-│  mavlink/ MavlinkProtocol (v1/v2, PARAM_*, COMMAND_*) + IDialect       │
+│  net/    TcpServerStream · TcpClientStream · UdpStream                 │
+│  cli/ CliProtocol · modbus/ ModbusRtu+Map · mavlink/ MavlinkV1+Map     │
+│  mavlink2/ Mavlink2Protocol (v2, msgid 24 bit) + IDialect của sản phẩm │
 ├────────────────────────────────────────────────────────────────────────┤
-│ SERVICES (services/)                                                   │
-│  EventBus · ParamStore(NV+CRC) · CommandService(bảng lệnh) · Logger    │
-│  LedService · Buffer + allocator (Pool / Chain, tĩnh) cho payload lớn  │
+│ SERVICES (services/)  dịch vụ hệ thống: có trạng thái, có chính sách   │
+│  ParamStore(NV+CRC) · CommandService(bảng lệnh) · Logger · LedService  │
 │  SerialPortBank (loopback/stream) · HdlcImu (thread đọc khung SDLC)    │
+├────────────────────────────────────────────────────────────────────────┤
+│ MESSAGING (messaging/)  lõi giao tiếp, không phụ thuộc nền tảng        │
+│  Event · EventBus · Buffer + pool tĩnh (BlockPool/Pool/ChainAllocator) │
 ╞═════════════════════════ PLATFORM (platform/) ═════════════════════════╡
 │ DEVICE (device/)  thiết bị NGOÀI chip: Tmp102 : ITemperatureSensor     │
 │  GpioInput/OutputBank : IDigitalInputs/Outputs · ImuFormat (giải mã)   │
+│ NET (net/)  TCP/IP IPv4: TcpListener · TcpConnection · UdpSocket       │
+│             ports: posix (BSD socket) │ lwip (MCU)   – EP_NET_PORT     │
 ├──────────────────────────────────┬─────────────────────────────────────┤
 │ OSAL (osal/)                     │ HAL (hal/)  ngoại vi TRÊN chip      │
 │  Thread · Mutex · Semaphore      │  IGpio · IUart · II2c · INvStorage  │
 │                                  │  IHdlcPort (SDLC/HDLC)              │
 │  Queue<T,N> · time · Critical    │  IBoard (ID logic -> chân vật lý)   │
-│  ports: posix·freertos·ucos2/3   │  ports: linux_sim │ linux_cpu │     │
-│                                  │         stm32f4 │ ...               │
+│  ports: posix·freertos·ucos2/3   │  ports: sim·stm32f4·zynqmp_linux/r5 │
+│                                  │         linux_cpu (bring-up)        │
 ├──────────────────────────────────┴─────────────────────────────────────┤
 │ CORE (core/)   Status · NonCopyable · config.hpp · compiler macros     │
 └────────────────────────────────────────────────────────────────────────┘
@@ -55,9 +61,11 @@ Mục tiêu:
 | **Utils** | Thuật toán & cấu trúc dữ liệu thuần: CRC, định dạng fixed-point, ring buffer | Phụ thuộc bất kỳ thư mục nào khác của dự án | – (hàm/template thuần) |
 | **Platform › Core** | Kiểu nền tảng: mã lỗi, cấu hình tĩnh, NonCopyable, macro compiler | Phụ thuộc bất kỳ thứ gì (trừ utils) | – |
 | **Platform › OSAL** | Thread, mutex, semaphore, queue, thời gian, vùng găng | Truy cập phần cứng | **Link-time** (chọn port khi build) → zero-overhead |
-| **Platform › HAL** | Ngoại vi **trên chip**: GPIO, UART, I2C, NV storage; `IBoard` ánh xạ ID logic → phần cứng | Gọi OSAL, chứa logic nghiệp vụ, biết tới sản phẩm | **Runtime** (interface ảo) → mock được, nhiều instance |
+| **Platform › HAL** | Ngoại vi **trên chip**: GPIO, UART, I2C, NV storage; `IBoard` ánh xạ ID logic → phần cứng. Cần chờ thì gọi `hal::wait_ms()` (target cài `osal::sleep_ms` vào sau khi kernel chạy – đảo phụ thuộc) | Gọi OSAL trực tiếp, chứa logic nghiệp vụ, biết tới sản phẩm | **Runtime** (interface ảo) → mock được, nhiều instance |
+| **Platform › Net** | TCP/IP (IPv4): `TcpListener`, `TcpConnection`, `UdpSocket`, timeout trên mọi thao tác, không heap | Biết giao thức ứng dụng; target không có mạng thì không có lớp này (`EP_NET_PORT` trống) | **Link-time** (port `posix`, `lwip`) |
 | **Platform › Device** | Driver thiết bị **ngoài chip** trên board (cảm biến, EEPROM, màn hình…) + interface theo loại thiết bị | Dùng services (EventBus, ParamStore, Logger), tự tạo thread, gọi API vendor | **Runtime** (`ITemperatureSensor`…) |
-| **Services** | Dịch vụ hệ thống dùng chung: event bus, tham số, bảng lệnh, log, LED | Chứa quy tắc nghiệp vụ của sản phẩm; gọi API vendor trực tiếp | Interface (`ILogSink`, `ICommandHandler`) |
+| **Messaging** | Cơ chế giao tiếp của framework: `Event`, `EventBus` (pub/sub, quy ước chia dải ID), payload lớn `Buffer` + pool tĩnh | Định nghĩa event cụ thể của lớp khác; phụ thuộc services trở lên; có port theo nền tảng | Interface (`IEventListener`, `IBufferAllocator`) |
+| **Services** | Dịch vụ hệ thống dùng chung, có trạng thái và chính sách: tham số, bảng lệnh, log, LED | Chứa quy tắc nghiệp vụ của sản phẩm; gọi API vendor trực tiếp | Interface (`ILogSink`, `ICommandHandler`) |
 | **Communication** | Truyền thông: kênh, giao thức (CLI, Modbus…), chọn/đổi giao thức lúc chạy | Biết tới module nghiệp vụ cụ thể (chỉ dùng Event/Param qua bảng ánh xạ) | **Runtime** (`IByteStream`, `IProtocol`) |
 | **Application – Runtime** | Vòng đời module, định tuyến event, lập lịch tick, state machine, boot | Chứa nghiệp vụ cụ thể | – |
 | **Application – Business** | Quy tắc nghiệp vụ (đo, cảnh báo, điều khiển...) | Include `hal/*`, `osal_port_types.hpp`, header vendor; tự tạo thread | Plug-in qua `IModule` |
@@ -71,11 +79,15 @@ utils ◄── core ◄─┤ osal ◄──┬── device                 �
                  │ hal  ◄──┴── target                 │
                  └────────────────┬───────────────────┘
                                   ▼
-            services ◄── communication(link ◄ cli, modbus) ◄── app_runtime ◄── business ◄── product
-                                                                                                │
-                                         main.cpp (thư mục gốc) ◄── nối product + target ───────┘
+            messaging ◄── services ◄── communication(link ◄ net, cli, modbus, mavlink, mavlink2) ◄── app_runtime ◄── business ◄── product
+                                                                                                             │
+                                                      main.cpp (thư mục gốc) ◄── nối product + target ───────┘
 ```
 (mũi tên `A ◄── B`: B phụ thuộc A)
+
+`messaging` **không** nằm trong `platform/`: nó không có port theo nền tảng và driver/HAL không được phát event
+(driver báo lỗi bằng `core::Status`; ISR đưa dữ liệu lên qua `utils::RingBuffer` / `Semaphore::give_from_isr`,
+một thread ở tầng trên mới publish). CMake chặn `platform` include `messaging`.
 
 `main.cpp` ở thư mục gốc là entry point **duy nhất**, giống nhau cho mọi target và sản phẩm:
 
@@ -97,9 +109,9 @@ Lớp dưới không bao giờ biết lớp trên; giao tiếp ngược lên ch�
 EmbededFramework/
 ├── CMakeLists.txt              # EP_TARGET, EP_PRODUCT
 ├── main.cpp                    # entry point duy nhất (mọi target, mọi sản phẩm)
-├── cmake/targets/              # linux_sim, linux_cpu, stm32f4_{freertos,ucos2,ucos3}.cmake (chọn port)
+├── cmake/targets/              # linux_sim, linux_cpu, stm32f4_{freertos,ucos2,ucos3}, zynqmp_{a53_linux,r5_freertos}
 │   └── common/stm32f4_cube.cmake   # phần CubeMX dùng chung cho mọi target STM32F4
-├── cmake/toolchains/           # arm-none-eabi.cmake, aarch64-linux-gnu.cmake
+├── cmake/toolchains/           # arm-none-eabi, armr5-none-eabi, aarch64-linux-gnu
 ├── utils/include/utils/        # crc.hpp, fixed_point.hpp, ring_buffer.hpp  (độc lập)
 ├── platform/                   # TẦNG NỀN TẢNG
 │   ├── core/include/core/      # status.hpp, config.hpp, noncopyable.hpp, compiler.hpp
@@ -107,35 +119,50 @@ EmbededFramework/
 │   │   ├── include/osal/       # API trung lập: thread, mutex, semaphore, queue, time, critical
 │   │   └── ports/{posix,freertos,ucos2,ucos3}/   # osal_port_types.hpp + osal_<os>.cpp
 │   ├── hal/
-│   │   ├── include/hal/        # gpio, uart, i2c, storage, hdlc, board
-│   │   └── ports/{linux_sim,linux_cpu,stm32f4}/   # linux_cpu: tty/RS485, GPIO chardev, HDLC thật
+│   │   ├── include/hal/        # gpio, uart, i2c, storage, hdlc, board, wait
+│   │   └── ports/
+│   │       ├── common/linux/   # dùng chung cho mọi board Linux: termios UART, /dev/i2c-N,
+│   │       │                   # GPIO chardev v2, file/EEPROM sysfs (EP_HAL_COMMON=linux)
+│   │       ├── linux_sim/      # PC: cảm biến/GPIO giả lập (+ 12 serial, 20 DI/DO, 2 IMU cho hw_bringup)
+│   │       ├── linux_cpu/      # CPU Linux của bo bring-up: tty RS485, GPIO bias/active-low, SDLC/HDLC
+│   │       ├── stm32f4/        # STM32Cube HAL
+│   │       ├── zynqmp_linux/   # Zynq UltraScale+ APU (Cortex-A53) chạy Linux
+│   │       └── zynqmp_r5/      # Zynq UltraScale+ RPU (Cortex-R5F): XGpioPs, XUartPs, XIicPs, EEPROM 24xx
+│   ├── net/                    # TCP/IP: include/net/net.hpp, ports/{posix,lwip}
 │   ├── device/
 │   │   └── include/device/     # temperature_sensor, tmp102, digital_io, imu (+ImuFormat)
 │   └── target/                 # khởi động theo nền tảng đích: target::init / run / stop_requested
 │       ├── include/target/target.hpp
 │       ├── linux_sim/          # tham số dòng lệnh, Ctrl+C, --run-for
-│       ├── linux_cpu/          # như linux_sim, cho CPU Linux chạy như dịch vụ (systemd)
+│       ├── linux_cpu/          # như linux_sim, chạy như dịch vụ (systemd)
 │       ├── stm32f4_freertos/   # HAL_Init, clock, ngoại vi CubeMX, start scheduler, hook FreeRTOS
 │       ├── stm32f4_ucos2/      # ... OSInit/OSStart, SysTick + PendSV cho uC/OS-II
 │       ├── stm32f4_ucos3/      # ... CPU_Init/OSInit/OSStart, SysTick + PendSV cho uC/OS-III
-│       └── common/stm32f4/     # clock_config.c dùng chung
+│       ├── zynqmp_a53_linux/   # như linux_sim + mlockall, kiểm tra quyền SCHED_FIFO
+│       ├── zynqmp_r5_freertos/ # task init + scheduler (BSP Xilinx khởi tạo clock/GIC/tick)
+│       └── common/{stm32f4,freertos}/   # clock_config.c; hook cấp phát tĩnh FreeRTOS dùng chung
+├── messaging/
+│   └── include/messaging/      # event, event_bus, buffer, buffer_allocators     (ep_messaging)
 ├── services/
-│   └── include/services/       # event_bus, param_store, command_service, logger, led_service,
-│                               # buffer, buffer_allocators, serial_port_bank, hdlc_imu
+│   └── include/services/       # param_store, param_cli, command_service, logger, led_service,
+│                               # serial_port_bank, hdlc_imu
 ├── communication/
 │   ├── link/                   # byte_stream, protocol, link_manager      (ep_comm)
+│   ├── net/                    # tcp_server/tcp_client/udp stream         (ep_comm_net, khi có mạng)
 │   ├── cli/                    # cli_protocol                             (ep_proto_cli)
 │   ├── modbus/                 # modbus_map (bảng ánh xạ), modbus_rtu     (ep_proto_modbus)
-│   └── mavlink/                # codec v1/v2, mavlink_protocol, common    (ep_proto_mavlink)
+│   ├── mavlink/                # mavlink_v1 (codec), mavlink_map, mavlink_protocol (ep_proto_mavlink)
+│   └── mavlink2/               # codec v2, common, mavlink_protocol + IDialect     (ep_proto_mavlink2)
 ├── app/
 │   ├── runtime/include/app/    # module, module_manager, state_machine, system, product
 │   └── business/               # module nghiệp vụ tái sử dụng + app_events.hpp, app_params.hpp
 ├── products/
-│   ├── thermo_pro/             # 3 module, latch, StatsReporter, CLI + Modbus (modbus_map.cpp)
+│   ├── thermo_pro/             # 3 module, latch, StatsReporter; CLI/Modbus/MAVLink qua UART, TCP, UDP
 │   ├── thermo_lite/            # 2 module, chỉ CLI, cấu hình nhỏ cho MCU ít RAM
-│   └── hw_bringup/             # bring-up phần cứng trên CPU Linux: 12 serial, GNSS, 20 DI/DO, 2 IMU, MAVLink
-├── tools/modbus_udp_client.py  # client Modbus RTU-over-UDP để thử bản mô phỏng
-├── tools/mavlink/              # bringup.xml (dialect), bringup_gcs.py (GCS dòng lệnh), mavlink_dialect.py
+│   └── hw_bringup/             # bring-up phần cứng trên CPU Linux: 12 serial, GNSS, 20 DI/DO, 2 IMU, MAVLink v2
+├── tools/                      # modbus_udp_client.py, mavlink_client.py (trạm mặt đất tối giản),
+│                               # check_mavlink_pymavlink.py (đối chiếu bằng pymavlink)
+│   └── mavlink/                # bringup.xml (dialect), bringup_gcs.py, mavlink_dialect.py (hw_bringup)
 └── tests/                      # unit test host + mocks HAL/stream
 ```
 
@@ -166,9 +193,9 @@ EmbededFramework/
 - Handler lệnh / giao thức chạy trên thread của kênh ⇒ **không sửa trạng thái module trực tiếp**, mà publish event yêu cầu
   (ví dụ `alarm ack` hoặc coil Modbus 0 → `kAlarmAckRequest`).
 - Event được copy theo giá trị qua bus/queue. Payload nhỏ nằm inline (`trivially_copyable`, ≤ 16 B, kiểm tra bằng
-  `static_assert`); payload lớn đi kèm `svc::Buffer` (xem dưới).
+  `static_assert`); payload lớn đi kèm `msg::Buffer` (xem dưới).
 
-### Payload lớn & kích thước thay đổi: `svc::Buffer`
+### Payload lớn & kích thước thay đổi: `msg::Buffer`
 
 ```
 Event { id, size, timestamp, payload[16] (header nhỏ inline), buffer ──► [refs|cap|len|owner][ dữ liệu ... ] }
@@ -176,11 +203,11 @@ Event { id, size, timestamp, payload[16] (header nhỏ inline), buffer ──►
 ```
 
 ```cpp
-svc::Buffer data = svc::Buffer::allocate(n * sizeof(int16_t));           // kích thước bất kỳ, lúc chạy
+msg::Buffer data = msg::Buffer::allocate(n * sizeof(int16_t));           // kích thước bất kỳ, lúc chạy
 std::memcpy(data.data(), samples, data.size());                           // GHI trước khi publish
-bus.publish(svc::Event::make(kTemperatureBatch, TemperatureBatch{n, ...}, std::move(data)));
+bus.publish(msg::Event::make(kTemperatureBatch, TemperatureBatch{n, ...}, std::move(data)));
 
-void on_event(const svc::Event& e) {                                      // mọi listener đọc CÙNG vùng nhớ
+void on_event(const msg::Event& e) {                                      // mọi listener đọc CÙNG vùng nhớ
     TemperatureBatch hdr{};
     if (e.id == kTemperatureBatch && e.get(hdr)) process(e.buffer.data(), e.buffer.size());
 }
@@ -226,7 +253,7 @@ mức dùng vùng stack, cần sửa `TaskPlan` / `EP_CFG_STACK_POOL_BYTES`.
 | Object của framework, sản phẩm | `static` / thành viên của `System` | Lúc khởi động |
 | Stack của thread | Do sản phẩm cấp (`stack_mem`) hoặc lấy từ **vùng stack tĩnh** `EP_CFG_STACK_POOL_BYTES` (`osal::allocate_stack`) | Chỉ lúc khởi động |
 | Kernel object (TCB, semaphore, mutex) | Nằm ngay trong wrapper OSAL (`xTaskCreateStatic`, `OS_TCB`, …) | Cùng lúc với object chứa nó |
-| Payload lớn | `svc::Buffer` + pool tĩnh | Lúc chạy, O(1), không heap |
+| Payload lớn | `msg::Buffer` + pool tĩnh | Lúc chạy, O(1), không heap |
 | Heap (`new`, `malloc`) | **Không dùng.** FreeRTOS: `configSUPPORT_DYNAMIC_ALLOCATION = 0`, không build `heap_x.c` | – |
 
 **Kiểm chứng lúc chạy:** firmware link `ep_heap_guard` (thay `operator new/delete`; trên STM32 bọc thêm
@@ -257,7 +284,7 @@ vùng RAM riêng). Mỗi port ánh xạ tuyến tính 16 mức sang priority nat
 | FreeRTOS | `configMAX_PRIORITIES-1` … `tskIDLE_PRIORITY` (số lớn = cao) | – |
 | uC/OS-II | `EP_UCOS2_PRIO_TOP` (4) … tăng `EP_UCOS2_PRIO_STRIDE` (3) mỗi mức (số nhỏ = cao); tối đa STRIDE task cùng mức (priority native duy nhất) | kiểm tra lúc build so với `OS_LOWEST_PRIO` |
 | uC/OS-III | `EP_UCOS3_PRIO_TOP` (4) … +1 mỗi mức; nhiều task cùng mức chạy round-robin | kiểm tra lúc build so với `OS_CFG_PRIO_MAX` |
-| POSIX (host) | Bỏ qua (cần quyền realtime); chỉ ghi nhận để hiển thị | – |
+| POSIX (host) | Mặc định bỏ qua (chỉ ghi nhận để hiển thị). Với `EP_POSIX_REALTIME=1` (target `zynqmp_a53_linux`): `SCHED_FIFO` 85 … 10 (`10 + 5·mức`); thiếu quyền thì giữ `SCHED_OTHER` và target in cảnh báo | `CAP_SYS_NICE` hoặc root; target gọi thêm `mlockall` để tránh page fault |
 
 ---
 
@@ -269,7 +296,7 @@ vùng RAM riêng). Mỗi port ánh xạ tuyến tính 16 mức sang priority nat
 | **Cấu hình module (compile-time)** | `Module::Config` truyền vào constructor | ngưỡng, chu kỳ mẫu, latch theo từng sản phẩm |
 | **Cấu hình hệ thống (compile-time)** | `product_config.hpp` override `EP_CFG_*` | độ sâu queue, số module, mức log tối thiểu |
 | **Tham số runtime** | `ParamStore` + CLI `param set/save`, sự kiện `kParamChanged` | đổi `alarm.high` khi đang chạy, lưu Flash |
-| **Bộ nhớ payload lớn** | Pool tĩnh của `svc::Buffer` chọn trong `product::setup()` | pool nhỏ cho MCU nhỏ, nhiều lớp pool cho bản cao cấp |
+| **Bộ nhớ payload lớn** | Pool tĩnh của `msg::Buffer` chọn trong `product::setup()` | pool nhỏ cho MCU nhỏ, nhiều lớp pool cho bản cao cấp |
 | **Priority & stack của task** | `TaskPlan` (`s.tasks`) + tham số của `add_channel()`; `EP_CFG_STACK_POOL_BYTES` | nghiệp vụ `High`, console `6`, LED `Low` |
 | **Mở rộng hành vi** | Module mới / state mới trong `StateMachine` | thêm trạng thái `Maintenance` |
 | **Module riêng của sản phẩm** | Đặt trong `products/<p>/` | `products/thermo_pro/stats_reporter.hpp` |
@@ -287,13 +314,13 @@ Mỗi giao thức chỉ là một *cách biểu diễn* khác của mô hình đ
                            │  Event miền, Param
  ═════════════════ EventBus · ParamStore · CommandService ═════════════  ← hợp đồng ổn định
                            │
- ① IProtocol        CliProtocol | ModbusRtuProtocol(+Map) | MavlinkProtocol(+IDialect)
+ ① IProtocol        CliProtocol | ModbusRtuProtocol(+Map) | MavlinkV1Protocol(+Map)
                            │  codec + phiên + ánh xạ Event/Param ↔ message
  ② LinkManager      kênh "console", "aux"...: 1 stream + giao thức cho phép + tham số comm.<kênh>
                            │
- ③ IByteStream      UartStream | (UdpStream, UsbCdcStream ...)
+ ③ IByteStream      UartStream | TcpServerStream | TcpClientStream | UdpStream | (UsbCdc...)
                            │
- HAL                IUart (Console, Aux), ...
+ HAL / Net          IUart (Console, Aux) · TcpListener/TcpConnection/UdpSocket
 ```
 
 | Muốn đổi… | Chỉ thay | Không động tới |
@@ -352,6 +379,75 @@ tools/modbus_udp_client.py text "link set aux auto"   # giờ aux là CLI: gửi
 tools/modbus_udp_client.py coil 0 on             # auto: Modbus được tự nhận dạng, xác nhận cảnh báo
 ```
 
+### 5.4 TCP/IP
+
+`platform/net/` trừu tượng hóa socket theo cùng mô hình OSAL (port chọn lúc build bằng `EP_NET_PORT`):
+`posix` (Linux/macOS) và `lwip` (MCU, socket API của lwIP 2.x; netif/`tcpip_init()` do target khởi tạo).
+Trên đó, `communication/net/` cung cấp ba `IByteStream`, nên **mọi giao thức** chạy được qua mạng:
+
+| Stream | Hành vi |
+|---|---|
+| `TcpServerStream` | Lắng nghe một cổng, một client tại một thời điểm; client ngắt thì chờ client kế tiếp |
+| `TcpClientStream` | Kết nối tới một địa chỉ, tự kết nối lại sau `retry_ms` khi mất kết nối |
+| `UdpStream` | Mỗi datagram là một khối byte; gửi tới đích cố định (`set_remote`) hoặc trả lời người gửi gần nhất |
+
+Thread RX của kênh là nơi duy nhất mở/đóng kết nối; ghi từ thread khác được khóa chung với việc đóng/mở,
+nên không bao giờ ghi vào socket đã đóng. Không cấp phát heap (không dùng `getaddrinfo`).
+Target không có mạng để trống `EP_NET_PORT`: `ep_net`/`ep_comm_net` không được build và sản phẩm tự bỏ
+kênh mạng (`EP_HAS_NET`). Kênh của `thermo_pro` trên mô phỏng:
+
+| Kênh | Stream | Giao thức cho phép (mặc định in đậm) |
+|---|---|---|
+| `console` | UART (terminal) | **cli**, modbus |
+| `aux` | UART (UDP 15020 trên mô phỏng) | **modbus**, mavlink, cli – `auto` phân biệt Modbus/MAVLink |
+| `tcp` | `TcpServerStream` cổng 5760 | **mavlink**, modbus, cli |
+| `udp` | `UdpStream` gửi tới 127.0.0.1:14550 (cổng của QGroundControl) | **mavlink** |
+
+### 5.5 MAVLink v1
+
+`communication/mavlink/` là codec MAVLink v1 tối giản (không cấp phát, không cần thư viện sinh mã):
+khung `0xFE LEN SEQ SYSID COMPID MSGID PAYLOAD CRC`, CRC-16/MCRF4XX + `CRC_EXTRA` của từng message;
+parser chịu được rác, khung bị chia nhỏ, CRC sai (tự tái đồng bộ). Message hỗ trợ: HEARTBEAT,
+PARAM_REQUEST_LIST/READ, PARAM_SET, PARAM_VALUE, COMMAND_LONG, COMMAND_ACK, NAMED_VALUE_FLOAT, STATUSTEXT
+(độ dài và `CRC_EXTRA` đối chiếu với `pymavlink` dialects/v10/common.py).
+
+`MavlinkV1Protocol` làm gì:
+
+| Chức năng | Cơ chế |
+|---|---|
+| HEARTBEAT 1 Hz | `system_status` lấy từ Event qua `Map::states` (thermo_pro: ALARM/FAULT → `MAV_STATE_CRITICAL`) |
+| Param protocol | Tự động cho **mọi** tham số `ParamStore`; giá trị gửi dạng `REAL32`, `PARAM_SET` làm tròn về số nguyên, kiểm tra miền; luôn trả lại giá trị hiện tại |
+| COMMAND_LONG → COMMAND_ACK | Bảng `Map::commands` (thermo_pro: `MAV_CMD_USER_1` = xác nhận cảnh báo, `MAV_CMD_PREFLIGHT_STORAGE` = lưu/nạp tham số) |
+| Telemetry | Event → `NAMED_VALUE_FLOAT` (`Map::telemetry`), Event → `STATUSTEXT` (`Map::status_texts`) |
+| Giám sát liên kết | Nhận HEARTBEAT của trạm mặt đất → log kết nối / mất kết nối (3 s) |
+
+Bảng ánh xạ của sản phẩm: `products/thermo_pro/mavlink_map.cpp` (sysid 1, compid 191). Thử trên mô phỏng:
+
+```bash
+tools/mavlink_client.py --tcp 127.0.0.1:5760 watch 3          # HEARTBEAT, temp, STATUSTEXT
+```
+```bash
+tools/mavlink_client.py --tcp 127.0.0.1:5760 params           # 13/13 tham số
+```
+```bash
+tools/mavlink_client.py --tcp 127.0.0.1:5760 set alarm.high 700
+```
+```bash
+tools/mavlink_client.py --tcp 127.0.0.1:5760 cmd 31010 1      # xác nhận cảnh báo
+```
+```bash
+tools/mavlink_client.py --udp 14550 watch 3                   # như QGroundControl
+```
+
+Đối chiếu bằng thư viện chính thức (cần `pip install pymavlink`):
+
+```bash
+tools/check_mavlink_pymavlink.py tcp:127.0.0.1:5760
+```
+
+QGroundControl / Mission Planner kết nối được qua UDP 14550 hoặc TCP 5760 (thiết bị hiện là component
+không phải bộ lái – `MAV_AUTOPILOT_INVALID` – nên GCS chủ yếu hiển thị tham số, STATUSTEXT và giá trị đặt tên).
+
 ---
 
 ## 6. Hướng dẫn mở rộng
@@ -366,7 +462,7 @@ public:
         ctx_ = &ctx;
         return ctx.params.register_params(defs_, 1);          // tham số của module
     }
-    void on_event(const svc::Event& e) override {
+    void on_event(const msg::Event& e) override {
         app::events::TemperatureSample s{};
         if (e.id == app::events::kTemperature && e.get(s)) { /* quy tắc nghiệp vụ */ }
     }
@@ -403,6 +499,8 @@ cmake -B build-my -DEP_PRODUCT=my_product
 3. Tạo `platform/target/<board>_<os>/` hiện thực `target::init()` (HAL vendor, clock, ngoại vi),
    `target::run()` (gọi `app_main` trong ngữ cảnh đúng, vd. task + start scheduler) và `target::stop_requested()`.
 4. Tạo `cmake/targets/<board>_<os>.cmake` đặt `EP_HAL_PORT=<board>`, `EP_OSAL_PORT`, toolchain/cờ CPU.
+   Board chạy **Linux** (Raspberry Pi, i.MX, Zynq APU…): đặt thêm `EP_HAL_COMMON=linux` và chỉ viết file
+   `IBoard` ánh xạ ID → `/dev/ttyX`, `/dev/i2c-N`, GPIO line (xem `ports/zynqmp_linux/`) – driver đã có sẵn.
    Tên file phải trùng tên thư mục ở bước 3. Build bằng `-DEP_TARGET=<board>_<os>`.
    ⇒ `main.cpp`, Services, App, Product **không đổi một dòng**.
 
@@ -453,20 +551,20 @@ Thứ gì cần mutex/thread (vd. `osal::Queue`) thuộc OSAL; thứ gì gắn v
 Nghiệp vụ chỉ phụ thuộc interface → thay chip cảm biến không ảnh hưởng nghiệp vụ. HAL khác theo board,
 còn driver thiết bị giống nhau trên mọi board và có thể dùng lại ở dự án khác.
 
-### 6.7 Thêm giao thức mới (vd. giao thức riêng)
-
-Ví dụ đầy đủ: `communication/mavlink/` (giao thức) + `products/hw_bringup/mavlink_dialect.cpp` (ánh xạ của sản phẩm,
-`mavlink::IDialect`) + `tests/test_mavlink.cpp` (khung mẫu sinh bằng pymavlink).
-
+### 6.7 Thêm giao thức mới (vd. CANopen, giao thức riêng)
 
 1. Tạo `communication/<proto>/` với target `ep_proto_<proto>` link `ep_comm`; thư viện bên thứ ba (vd. header
    MAVLink sinh từ XML) đặt ở `third_party/` và **chỉ** target này được include.
 2. Hiện thực `comm::IProtocol`: `id()` (giá trị ổn định, vd. `proto::kMavlink` hoặc `proto::kUserBase + n`),
    `attach/detach`, `on_rx` (parse), `poll` (heartbeat/timeout), `probe` (nhận dạng chặt chẽ, có CRC).
-   Cần đẩy dữ liệu chủ động thì kế thừa thêm `svc::IEventListener` và ghi qua `io.write()` (đã thread-safe).
+   Cần đẩy dữ liệu chủ động thì kế thừa thêm `msg::IEventListener` và ghi qua `io.write()` (đã thread-safe).
 3. Đặt bảng ánh xạ Event/Param ↔ message ở sản phẩm (như `modbus_map.cpp`), không viết vào nghiệp vụ.
 4. Trong `product::setup()`: tạo instance (mỗi kênh một instance) và thêm vào danh sách của kênh.
 5. Test bằng `mock::ScriptedStream` + khung mẫu (golden frame), như `tests/test_modbus.cpp`, `tests/test_link_manager.cpp`.
+
+Ví dụ đầy đủ để tham khảo: `communication/mavlink/` (codec + protocol + bảng ánh xạ ở `products/thermo_pro/mavlink_map.cpp`)
+và `tests/test_mavlink.cpp`; với bản tin riêng của sản phẩm: `communication/mavlink2/` + `products/hw_bringup/mavlink_dialect.cpp`
+(`mavlink2::IDialect`) + `tests/test_mavlink2.cpp` (khung mẫu sinh bằng pymavlink).
 
 ---
 
@@ -502,15 +600,6 @@ alarm status | ack           trạng thái cảnh báo / xác nhận
 link list | set <kênh> <off|auto|cli|modbus>   kênh truyền thông & đổi giao thức
 ```
 
-### CPU Linux – sản phẩm bring-up phần cứng (MAVLink)
-
-```bash
-cmake -B build-cpu -DEP_TARGET=linux_cpu -DEP_PRODUCT=hw_bringup
-```
-
-Mô phỏng: `-DEP_PRODUCT=hw_bringup` với target mặc định `linux_sim`. Chi tiết, giao diện MAVLink, cấu hình phần cứng:
-[`products/hw_bringup/README.md`](products/hw_bringup/README.md); yêu cầu: [`products/hw_bringup/REQUIREMENTS.md`](products/hw_bringup/REQUIREMENTS.md).
-
 ### STM32F407 + FreeRTOS / uC/OS-II / uC/OS-III
 
 Cùng HAL port `stm32f4`, cùng ứng dụng – chỉ khác RTOS:
@@ -545,6 +634,85 @@ warning) và chạy toàn bộ unit test cùng firmware mô phỏng trên một 
 nằm trong repo), nên logic port đã được kiểm tra; các khác biệt của kernel thật (lập lịch theo priority, ngắt,
 port CPU) vẫn cần kiểm thử trên board.
 
+### CPU Linux – sản phẩm bring-up phần cứng (MAVLink v2)
+
+```bash
+cmake -B build-cpu -DEP_TARGET=linux_cpu -DEP_PRODUCT=hw_bringup
+```
+
+Mô phỏng: `-DEP_PRODUCT=hw_bringup` với target mặc định `linux_sim`. Sản phẩm dùng `communication/mavlink2/`
+(MAVLink v2 + dialect `tools/mavlink/bringup.xml`, msgid 24 bit, `SERIAL_CONTROL` cho GNSS) thay vì
+`communication/mavlink/` (v1), trên cổng serial và – khi target có mạng – UDP 14560.
+Chi tiết: [`products/hw_bringup/README.md`](products/hw_bringup/README.md); yêu cầu:
+[`products/hw_bringup/REQUIREMENTS.md`](products/hw_bringup/REQUIREMENTS.md).
+
+### Xilinx Zynq UltraScale+ MPSoC (ZCU102, ZCU104, Kria…)
+
+Hai target, dùng được riêng hoặc cùng lúc (AMP – mỗi lõi chạy một firmware):
+
+| | APU – `zynqmp_a53_linux` | RPU – `zynqmp_r5_freertos` |
+|---|---|---|
+| CPU / OS | Cortex-A53, Linux (PetaLinux/Yocto) | Cortex-R5F, FreeRTOS (BSP `freertos` của Vitis) |
+| OSAL | `posix` + `EP_POSIX_REALTIME`: Priority → `SCHED_FIFO` 10..85 | `freertos` (chỉ cấp phát tĩnh) |
+| HAL | `zynqmp_linux` + `common/linux`: driver kernel chuẩn | `zynqmp_r5`: driver standalone XGpioPs/XUartPs/XIicPs, polled |
+| Console | stdin/stdout (ttyPS0 hoặc ssh) | PS UART1 |
+| Aux UART | `/dev/ttyPS1` | tắt (bật bằng `EP_ZYNQMP_R5_AUX_UART=<id>`) |
+| I2C cảm biến | `/dev/i2c-1` | PS I2C1, 100 kHz, qua I2C mux 0x74 (kênh 0) |
+| LED / nút | PS GPIO: MIO23 (status), EMIO0 = line 78 (alarm, cần design PL), MIO22 (nút) | như APU |
+| NV storage | `/var/lib/embededframework/nvram.bin` (hoặc file EEPROM sysfs) | EEPROM 24xx @0x54 trên bus cảm biến |
+| Reset | thoát tiến trình (`systemd Restart=always`) | soft reset hệ thống (`CRL_APB.RESET_CTRL`) |
+
+Giá trị mặc định theo ZCU102 – **đối chiếu với device tree / schematic của board bạn**.
+
+**APU (Linux)** – cấu hình lúc chạy bằng biến môi trường, không cần build lại:
+`EP_ZYNQMP_AUX_UART` (`""` = tắt), `EP_ZYNQMP_SENSOR_I2C`, `EP_ZYNQMP_GPIOCHIP` (đường dẫn hoặc nhãn chip),
+`EP_ZYNQMP_LED_STATUS`, `EP_ZYNQMP_LED_ALARM`, `EP_ZYNQMP_BUTTON` (số line), `EP_ZYNQMP_NVRAM`.
+Thiết bị nào thiếu thì in cảnh báo và chạy tiếp (vd. thiếu cảm biến → cảnh báo vào `FAULT`).
+
+```bash
+cmake -B build-zynqmp -DEP_TARGET=zynqmp_a53_linux \
+      -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-gnu.cmake
+cmake --build build-zynqmp -j
+ctest --test-dir build-zynqmp            # trên PC x86: chạy qua qemu-aarch64
+```
+```bash
+# trên board: SCHED_FIFO + mlockall cần root hoặc capability
+sudo setcap cap_sys_nice,cap_ipc_lock+ep ./firmware
+EP_ZYNQMP_AUX_UART=/dev/ttyUL0 ./firmware
+```
+Có thể dùng SDK của PetaLinux thay toolchain trên: `source environment-setup-cortexa72-cortexa53-xilinx-linux`
+rồi bỏ `-DCMAKE_TOOLCHAIN_FILE` (SDK tự đặt compiler và sysroot).
+
+**RPU (FreeRTOS)** – trong Vitis tạo platform cho `psu_cortexr5_0`, OS = freertos, đặt
+`configSUPPORT_STATIC_ALLOCATION=1`, `configCHECK_FOR_STACK_OVERFLOW=2`, build BSP; lấy `lscript.ld` từ một app mẫu:
+
+```bash
+cmake -B build-r5 -DEP_TARGET=zynqmp_r5_freertos \
+      -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/armr5-none-eabi.cmake \
+      -DEP_XILINX_BSP_DIR=<platform>/psu_cortexr5_0/freertos_domain/bsp/psu_cortexr5_0 \
+      -DEP_XILINX_LINKER_SCRIPT=<app>/src/lscript.ld
+cmake --build build-r5 -j                 # -> firmware.elf: nạp bằng XSCT/JTAG hoặc đóng vào BOOT.BIN
+```
+Gán ngoại vi khác mặc định bằng `-DEP_XILINX_DEFINES="EP_ZYNQMP_R5_CONSOLE_UART=0;EP_ZYNQMP_R5_EEPROM_ENABLE=0"`
+(danh sách macro ở đầu `platform/hal/ports/zynqmp_r5/zynqmp_r5_board.cpp`). BSP theo flow System Device Tree
+(Vitis Unified IDE): thêm `-DEP_XILINX_SDT=ON` (driver tra cứu theo `XPAR_*_BASEADDR` thay vì `DEVICE_ID`).
+Dùng Arm GNU Toolchain thay toolchain của Vitis: `-DEP_ARMR5_PREFIX=arm-none-eabi-`.
+
+**AMP (Linux + FreeRTOS cùng lúc):** mỗi ngoại vi chỉ được **một** bên dùng. Ví dụ: APU giữ UART0 + I2C0,
+RPU giữ UART1 + I2C1 + EEPROM – tắt các node tương ứng trong device tree của Linux và cấu hình firmware R5
+bằng các macro trên. Hai bên có thể nói chuyện với nhau qua một kênh đã có (UART nối chéo, UDP qua mạng)
+bằng chính các giao thức CLI/Modbus/MAVLink của framework; OpenAMP/RPMsg chưa có sẵn – thêm bằng một
+`IByteStream` mới (xem 6.7).
+
+**Mức độ kiểm chứng:**
+- APU: cross build AArch64 không warning; toàn bộ unit test (kể cả test HAL Linux: UART qua pty, FileStorage,
+  thiết bị vắng mặt) và firmware chạy dưới **qemu-aarch64** – Modbus RTU qua pty, MAVLink qua TCP, priority
+  realtime, 0 vi phạm heap. **Chưa chạy trên board thật** (GPIO chardev/I2C thật chỉ được kiểm tra nhánh lỗi).
+- RPU: HAL, target và toàn bộ framework **biên dịch** cho Cortex-R5F (`arm-none-eabi-g++`) với header thật
+  của Xilinx embeddedsw (driver gpiops/uartps/iicps, standalone, FreeRTOS port ARM_CR5); mọi symbol driver mà
+  framework dùng đều link được với các driver đó. `xparameters.h`/`FreeRTOSConfig.h` là bản giả lập theo ZCU102,
+  chưa link với một BSP Vitis hoàn chỉnh. **Chưa chạy trên phần cứng.**
+
 ---
 
 ## 8. Quy ước code cho môi trường nhúng
@@ -552,7 +720,7 @@ port CPU) vẫn cần kiểm thử trên board.
 - C++17, `-fno-exceptions -fno-rtti`; lỗi trả về `core::Status`.
 - Không cấp phát động sau khi khởi động (bộ chặn heap kiểm chứng lúc chạy): dùng `std::array`, `static` object,
   stack tĩnh cho thread, pool tĩnh cho payload. Không tạo thread mới lúc chạy trừ khi tự mang stack tĩnh.
-  Bộ nhớ động cho payload chỉ đi qua `svc::Buffer` + allocator mà sản phẩm chọn (mặc định nên là pool tĩnh).
+  Bộ nhớ động cho payload chỉ đi qua `msg::Buffer` + allocator mà sản phẩm chọn (mặc định nên là pool tĩnh).
 - Không dùng `std::string`, `std::vector`, `iostream` trong firmware (chỉ được dùng trong test / port host).
 - Khởi tạo hai pha (`init()` sau constructor) cho object phụ thuộc phần cứng.
 - API gọi được từ ISR chỉ có hậu tố `_from_isr`. Logger không được gọi trong ISR.
@@ -568,7 +736,7 @@ port CPU) vẫn cần kiểm thử trên board.
 | Adapter / Bridge | HAL ports, OSAL ports |
 | Abstract Factory | `hal::IBoard` |
 | Dependency Injection / Composition Root | `SystemContext`, `app::System` |
-| Publish–Subscribe | `svc::EventBus` |
+| Publish–Subscribe | `msg::EventBus` |
 | Active Object | `app::ModuleManager` |
 | State Machine (state = method) | `app::StateMachine`, `AlarmController` |
 | Plug-in / Strategy | `IModule`, `ITemperatureSensor`, `ILogSink`, `ICommandHandler` |

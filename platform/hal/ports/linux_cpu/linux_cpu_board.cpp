@@ -9,6 +9,7 @@
 #include <string>
 
 #include "board_config.hpp"
+#include "linux/linux_hal.hpp"
 #include "linux_peripherals.hpp"
 
 namespace hal {
@@ -81,7 +82,8 @@ public:
             const std::string s = o.get("hdlc", i, cfg::kHdlc[i]);
             if (present(s)) hdlc_[i].reset(new linux_cpu::LinuxHdlc(s));
         }
-        storage_.reset(new linux_cpu::FileStorage(o.get("nvram", -1, cfg::kNvram), 4096));
+        nvram_path_ = o.get("nvram", -1, cfg::kNvram);
+        storage_.reset(new host::FileStorage(nvram_path_.c_str(), 4096));
     }
 
     core::Status init() override {
@@ -117,12 +119,13 @@ public:
     }
 
 private:
-    linux_cpu::StdioUart console_;
+    host::StdioUart console_;
     std::unique_ptr<linux_cpu::LinuxSerial> serial_[cfg::kSerialCount];
     std::unique_ptr<linux_cpu::LinuxGpio> di_[cfg::kDigitalInputCount];
     std::unique_ptr<linux_cpu::LinuxGpio> do_[cfg::kDigitalOutputCount];
     std::unique_ptr<linux_cpu::LinuxHdlc> hdlc_[cfg::kHdlcCount];
-    std::unique_ptr<linux_cpu::FileStorage> storage_;
+    std::string nvram_path_;   // FileStorage giữ con trỏ -> chuỗi phải sống cùng board
+    std::unique_ptr<host::FileStorage> storage_;
 };
 
 }  // namespace

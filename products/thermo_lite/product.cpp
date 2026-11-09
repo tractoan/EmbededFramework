@@ -4,7 +4,7 @@
 #include "alarm_controller/alarm_controller.hpp"
 #include "app/product.hpp"
 #include "comm/cli_protocol.hpp"
-#include "services/buffer_allocators.hpp"
+#include "messaging/buffer_allocators.hpp"
 #include "temperature_monitor/temperature_monitor.hpp"
 
 namespace product {
@@ -24,9 +24,9 @@ core::Status setup(app::ProductSetup& s) {
 
     // MCU nhỏ: một pool tĩnh 4 x 128 B, không heap. Lô mặc định tắt (batch_size = 0);
     // bật bằng "param set temp.batch_n <n>" với n <= 52 mẫu.
-    static svc::StaticBlockPool<128, 4> pool_blocks;
-    static svc::PoolAllocator pool({&pool_blocks});
-    svc::Buffer::set_default_allocator(&pool);
+    static msg::StaticBlockPool<128, 4> pool_blocks;
+    static msg::PoolAllocator pool({&pool_blocks});
+    msg::Buffer::set_default_allocator(&pool);
 
     // MCU nhỏ: stack gọn hơn (tổng 7 KB, vừa EP_CFG_STACK_POOL_BYTES = 8 KB trong product_config.hpp).
     s.tasks.app  = osal::ThreadConfig{"app", osal::Priority::High, 3072, nullptr};

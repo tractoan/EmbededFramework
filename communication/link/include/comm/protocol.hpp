@@ -4,7 +4,7 @@
 #include "comm/byte_stream.hpp"
 #include "core/status.hpp"
 #include "services/command_service.hpp"
-#include "services/event_bus.hpp"
+#include "messaging/event_bus.hpp"
 #include "services/param_store.hpp"
 
 namespace comm {
@@ -24,7 +24,7 @@ inline constexpr ProtocolId kUserBase  = 32;   // giao thức riêng của sản
 // Những dịch vụ một giao thức được phép dùng: nói chuyện với nghiệp vụ CHỈ qua
 // EventBus (mô hình dữ liệu chuẩn), ParamStore và bảng lệnh.
 struct Services {
-    svc::EventBus& bus;
+    msg::EventBus& bus;
     svc::ParamStore& params;
     svc::CommandService& commands;
 };

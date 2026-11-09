@@ -12,14 +12,18 @@
 #include "comm/cli_protocol.hpp"
 #include "imu_bringup/imu_bringup.hpp"
 #include "io_bringup/io_bringup.hpp"
-#include "mavlink/mavlink_protocol.hpp"
+#include "mavlink2/mavlink_protocol.hpp"
 #include "mavlink_dialect.hpp"
 #include "serial_bringup/serial_bringup.hpp"
 #include "device/digital_io.hpp"
 #include "services/hdlc_imu.hpp"
-#include "services/buffer_allocators.hpp"
+#include "messaging/buffer_allocators.hpp"
 #include "services/logger.hpp"
 #include "services/serial_port_bank.hpp"
+
+#if EP_HAS_NET
+#include "comm/net_streams.hpp"
+#endif
 
 namespace product {
 
@@ -95,12 +99,12 @@ void setup_imu(hal::IBoard& board) {
 // Bộ nhớ cho Event::buffer: chỉ pool tĩnh (O(1), không phân mảnh, không heap). Sức chứa tính theo
 // header 24 B trên host 64-bit. Xem mức dùng/thất bại bằng "sys buffers".
 void setup_buffers() {
-    static svc::StaticBlockPool<64, 32> tiny;      // BringupStatus, STATUSTEXT ngắn (loạt thông báo lúc khởi động)
-    static svc::StaticBlockPool<128, 64> small;    // ImuSample, STATUSTEXT, lệnh GNSS
-    static svc::StaticBlockPool<256, 16> medium;   // bảng loopback 12-16 cổng
-    static svc::StaticBlockPool<1024, 16> large;   // gói dữ liệu GNSS (<= 512 B)
-    static svc::PoolAllocator pools({&tiny, &small, &medium, &large});
-    svc::Buffer::set_default_allocator(&pools);
+    static msg::StaticBlockPool<64, 32> tiny;      // BringupStatus, STATUSTEXT ngắn (loạt thông báo lúc khởi động)
+    static msg::StaticBlockPool<128, 64> small;    // ImuSample, STATUSTEXT, lệnh GNSS
+    static msg::StaticBlockPool<256, 16> medium;   // bảng loopback 12-16 cổng
+    static msg::StaticBlockPool<1024, 16> large;   // gói dữ liệu GNSS (<= 512 B)
+    static msg::PoolAllocator pools({&tiny, &small, &medium, &large});
+    msg::Buffer::set_default_allocator(&pools);
 }
 
 void setup_tasks(app::TaskPlan& t) {
@@ -119,6 +123,32 @@ core::Status setup_modules(app::ModuleManager& modules) {
     if (core::is_ok(st)) st = modules.add(&imu);
     return st;
 }
+
+// Ánh xạ Event <-> bản tin dùng chung cho mọi kênh MAVLink (không có trạng thái).
+BringupDialect& dialect() {
+    static BringupDialect d;
+    return d;
+}
+
+#if EP_HAS_NET
+// Kênh MAVLink thứ hai qua UDP: phần mềm giao diện kết nối qua mạng (QGroundControl: UDP link tới
+// <ip>:kGcsUdpPort). Mỗi kênh một instance giao thức; telemetry được gửi trên cả hai kênh.
+core::Status setup_network_link(app::ProductSetup& s) {
+    if (hw::kGcsUdpPort == 0) return core::Status::Ok;
+    static comm::UdpStream udp;
+    const core::Status st = udp.open(hw::kGcsUdpPort);
+    if (!core::is_ok(st)) {
+        LOGW(kTag, "UDP %u unavailable (%s): GUI over network disabled", static_cast<unsigned>(hw::kGcsUdpPort),
+             core::to_string(st));
+        return core::Status::Ok;   // không chặn bring-up: cổng serial vẫn dùng được
+    }
+    static mavlink2::Mavlink2Protocol udp_mavlink(dialect());
+    LOGI(kTag, "GUI link also on UDP port %u", static_cast<unsigned>(hw::kGcsUdpPort));
+    return s.links.add_channel("gcs_udp", &udp, {&udp_mavlink}, comm::proto::kMavlink, kGcsLinkPriority, 4096);
+}
+#else
+core::Status setup_network_link(app::ProductSetup&) { return core::Status::Ok; }
+#endif
 
 core::Status setup_links(app::ProductSetup& s) {
     // Console (stdin/stdout hoặc UART debug): CLI để chẩn đoán tại chỗ.
@@ -140,10 +170,11 @@ core::Status setup_links(app::ProductSetup& s) {
     if (!core::is_ok(st)) LOGE(kTag, "GUI port %d open failed: %s", hw::kGcsPort, core::to_string(st));
     gcs.attach(uart);
 
-    static BringupDialect dialect;
-    static mavlink::MavlinkProtocol gcs_mavlink(dialect);
+    static mavlink2::Mavlink2Protocol gcs_mavlink(dialect());
     static comm::CliProtocol gcs_cli(true);
-    return s.links.add_channel("gcs", &gcs, {&gcs_mavlink, &gcs_cli}, comm::proto::kMavlink, kGcsLinkPriority, 4096);
+    st = s.links.add_channel("gcs", &gcs, {&gcs_mavlink, &gcs_cli}, comm::proto::kMavlink, kGcsLinkPriority, 4096);
+    if (!core::is_ok(st)) return st;
+    return setup_network_link(s);
 }
 
 }  // namespace

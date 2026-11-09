@@ -41,9 +41,10 @@ target_compile_options(ep_options INTERFACE
 
 # Thứ tự = thứ tự phụ thuộc. Quy tắc phụ thuộc được ép bởi target_link_libraries:
 #   utils (độc lập)
-#   platform(core <- osal, hal <- device, target) <- services <- communication <- app(runtime, business) <- product <- firmware
+#   platform(core <- osal, hal <- device, target) <- messaging <- services <- communication <- app(runtime, business) <- product <- firmware
 add_subdirectory(utils)
 add_subdirectory(platform)
+add_subdirectory(messaging)
 add_subdirectory(services)
 add_subdirectory(communication)
 add_subdirectory(app)

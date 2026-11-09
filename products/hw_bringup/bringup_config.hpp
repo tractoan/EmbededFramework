@@ -15,6 +15,9 @@ inline constexpr std::size_t kSerialCount = 12;
 inline constexpr int kGcsPort  = 0;   // phần mềm giao diện (MAVLink)
 inline constexpr int kGnssPort = 1;   // máy thu GNSS (không có dữ liệu trong gnss.detect_ms -> loopback)
 inline constexpr std::uint32_t kGcsBaudrate      = 115200;
+// Kênh MAVLink thứ hai qua UDP (chỉ khi target có mạng): firmware nghe cổng này, trả lời địa chỉ gửi
+// gần nhất (phần mềm giao diện gửi HEARTBEAT trước). 0 = tắt.
+inline constexpr std::uint16_t kGcsUdpPort       = 14560;
 inline constexpr std::uint32_t kLoopbackBaudrate = 115200;
 // Loopback nối chéo từng cặp (vd. RS485 2 dây không tự nghe được chính nó): kLoopbackPeer[a] = b
 // và kLoopbackPeer[b] = a. -1 = giắc loopback TX->RX trên chính cổng (RS232, RS422/RS485 4 dây).

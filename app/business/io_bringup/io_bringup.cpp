@@ -33,7 +33,7 @@ void IoBringup::publish(std::uint64_t now_ms) {
     s.outputs      = out_ ? out_->state() : 0;
     s.input_count  = static_cast<std::uint8_t>(in_ ? in_->count() : 0);
     s.output_count = static_cast<std::uint8_t>(out_ ? out_->count() : 0);
-    ctx_->bus.publish(svc::Event::make(bringup::kIoStatus, s));
+    ctx_->bus.publish(msg::Event::make(bringup::kIoStatus, s));
     next_report_ = now_ms + report_ms_;
 }
 
@@ -50,7 +50,7 @@ void IoBringup::on_tick(std::uint64_t now_ms) {
     if (changed || now_ms >= next_report_) publish(now_ms);
 }
 
-void IoBringup::on_event(const svc::Event& e) {
+void IoBringup::on_event(const msg::Event& e) {
     svc::ParamChanged pc{};
     if (e.id == svc::evt::kParamChanged && e.get(pc) && pc.id == params::kIoReportMs) {
         report_ms_ = static_cast<std::uint32_t>(pc.value);
@@ -90,7 +90,7 @@ int IoBringup::on_command(int argc, char** argv, svc::CommandOutput& out) {
         request   = true;
     }
     if (request) {
-        ctx_->bus.publish(svc::Event::make(bringup::kOutputSetRequest, req));
+        ctx_->bus.publish(msg::Event::make(bringup::kOutputSetRequest, req));
         return 0;
     }
     const std::uint32_t in = inputs_.load(), o = out_ ? out_->state() : 0;

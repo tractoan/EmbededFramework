@@ -1,29 +1,29 @@
 #pragma once
-// Các chiến lược cấp phát cho svc::Buffer – TẤT CẢ dùng bộ nhớ tĩnh, không dùng heap.
+// Các chiến lược cấp phát cho msg::Buffer – TẤT CẢ dùng bộ nhớ tĩnh, không dùng heap.
 //
 //   PoolAllocator  – nhiều lớp kích thước cố định, bộ nhớ tĩnh: O(1), không phân mảnh,
 //                    tất định. Lớp vừa nhất hết chỗ -> dùng lớp lớn hơn.
 //   ChainAllocator – thử allocator chính trước, hết thì dùng allocator dự phòng
 //                    (vd. pool chung -> pool dự trữ riêng cho dữ liệu quan trọng).
 //
-//   static svc::StaticBlockPool<64, 16>   small;
-//   static svc::StaticBlockPool<512, 8>   medium;
-//   static svc::StaticBlockPool<2048, 4>  large;
-//   static svc::PoolAllocator pools({&small, &medium, &large});
-//   svc::Buffer::set_default_allocator(&pools);
+//   static msg::StaticBlockPool<64, 16>   small;
+//   static msg::StaticBlockPool<512, 8>   medium;
+//   static msg::StaticBlockPool<2048, 4>  large;
+//   static msg::PoolAllocator pools({&small, &medium, &large});
+//   msg::Buffer::set_default_allocator(&pools);
 #include <array>
 #include <cstddef>
 #include <initializer_list>
 
 #include "core/config.hpp"
 #include "core/noncopyable.hpp"
-#include "services/buffer.hpp"
+#include "messaging/buffer.hpp"
 
 #ifndef EP_CFG_MAX_BUFFER_POOLS
 #define EP_CFG_MAX_BUFFER_POOLS 8
 #endif
 
-namespace svc {
+namespace msg {
 
 // Một pool các block cùng kích thước, danh sách rỗi liên kết ngay trong block trống.
 // KHÔNG tự khóa – được PoolAllocator bảo vệ.
@@ -98,4 +98,4 @@ private:
     IBufferAllocator& fallback_;
 };
 
-}  // namespace svc
+}  // namespace msg
