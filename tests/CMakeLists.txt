@@ -22,7 +22,7 @@ add_executable(ep_tests
 target_include_directories(ep_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(ep_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/hw_bringup)   # dialect MAVLink của hw_bringup
 target_link_libraries(ep_tests PRIVATE ep_heap_guard ep_business ep_business_bringup ep_proto_cli ep_proto_modbus
-                      ep_proto_mavlink ep_proto_mavlink2)
+                      ep_proto_mavlink ep_proto_mavlink2 ep_mavlink2_bringup)
 add_test(NAME ep_tests COMMAND ep_tests)
 
 # Test TCP/IP chỉ khi target có mạng

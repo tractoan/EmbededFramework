@@ -7,3 +7,6 @@ add_library(ep_proto_mavlink2 STATIC
   src/mavlink_protocol.cpp)
 target_include_directories(ep_proto_mavlink2 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(ep_proto_mavlink2 PUBLIC ep_comm)
+
+# Dialect (định nghĩa bản tin riêng) đi kèm giao thức – mỗi dialect một thư viện header-only.
+add_subdirectory(dialects/bringup)   # ep_mavlink2_bringup

@@ -19,6 +19,7 @@ Firmware chạy trên **CPU nhúng (Linux)** để kiểm tra bo mạch, báo k�
  app/business          SerialBringup (loopback, vai trò cổng) · GnssBringup (luật 5 s, fix/thô/lệnh) · IoBringup · ImuBringup
                        (chỉ CHÍNH SÁCH, nói chuyện qua Event/Param + interface service)
  communication/mavlink2 Mavlink2Protocol: khung v2 (+nhận v1), heartbeat, PARAM_* <-> ParamStore, COMMAND_LONG/ACK, IDialect
+   dialects/bringup    định nghĩa bản tin 62000..62005 trên dây (struct, offset, CRC_EXTRA) – không phụ thuộc nghiệp vụ
  communication/net     UdpStream: kênh MAVLink thứ hai qua mạng (khi target có TCP/IP)
  services              SerialPortBank (thread/cổng: Loopback|Stream|External) · GnssReceiver (thread: NMEA, fix, gửi lệnh)
                        · HdlcImu (thread đọc khung)   (CƠ CHẾ, không biết khái niệm bring-up)
@@ -50,7 +51,17 @@ Luồng: thread cổng/IMU → service (atomic, ring buffer) → module (thread 
 ## Giao diện MAVLink
 
 Dialect: [`tools/mavlink/bringup.xml`](../../tools/mavlink/bringup.xml) (include `common.xml`) – phần mềm giao diện sinh mã
-bằng `mavgen` (C#, C++, Python...). System/component của firmware: 1/1; heartbeat 1 Hz (`MAV_TYPE_ONBOARD_CONTROLLER`).
+bằng `mavgen` (C#, C++, Python...).
+
+Ba phần của dialect trong firmware:
+| Phần | Ở đâu | Phụ thuộc |
+|---|---|---|
+| Định nghĩa gốc | `tools/mavlink/bringup.xml` | – |
+| Bản tin trên dây (struct, offset, CRC_EXTRA, `rx_crc_extra()`) | `communication/mavlink2/dialects/bringup/` (`mavlink2::bringup`, `ep_mavlink2_bringup`) | chỉ codec MAVLink v2 |
+| Ánh xạ Event nghiệp vụ <-> bản tin (`BringupDialect : mavlink2::IDialect`) | `products/hw_bringup/mavlink_dialect.cpp` | event bring-up (app/business) – vì vậy ở lớp product |
+
+Thêm bản tin: sửa XML → thêm struct ở `dialects/bringup/.../messages.hpp` (`ctest` đối chiếu CRC_EXTRA/độ dài với XML)
+→ thêm ánh xạ ở `mavlink_dialect.cpp` (bản tin giao diện gửi xuống: thêm vào `rx_crc_extra()`). System/component của firmware: 1/1; heartbeat 1 Hz (`MAV_TYPE_ONBOARD_CONTROLLER`).
 
 | Chiều | Bản tin | Nội dung |
 |---|---|---|

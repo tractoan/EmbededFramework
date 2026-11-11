@@ -158,6 +158,7 @@ EmbededFramework/
 │   ├── modbus/                 # modbus_map (bảng ánh xạ), modbus_rtu     (ep_proto_modbus)
 │   ├── mavlink/                # mavlink_v1 (codec), mavlink_map, mavlink_protocol (ep_proto_mavlink)
 │   └── mavlink2/               # codec v2, common, mavlink_protocol + IDialect     (ep_proto_mavlink2)
+│       └── dialects/bringup/   # bản tin dialect bringup.xml 62000..62005 (header-only, ep_mavlink2_bringup)
 ├── app/
 │   ├── runtime/include/app/    # module, module_manager, module_worker, state_machine, system, product
 │   └── business/               # module nghiệp vụ tái sử dụng + app_events.hpp, app_params.hpp

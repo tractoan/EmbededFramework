@@ -1,13 +1,16 @@
 #pragma once
-// Bản tin của dialect "bringup" (tools/mavlink/bringup.xml). Offset theo thứ tự trên dây;
-// CRC_EXTRA khớp mavgen – kiểm tra chéo bằng: python3 tools/mavlink/mavlink_dialect.py --check
+// Dialect MAVLink "bringup" (định nghĩa gốc: tools/mavlink/bringup.xml): bản tin 62000..62005.
+// Chỉ là ĐỊNH NGHĨA TRÊN DÂY (struct, offset, CRC_EXTRA, pack/unpack) – không phụ thuộc nghiệp vụ, nên dùng
+// lại được cho mọi sản phẩm/công cụ nói dialect này. Ánh xạ Event <-> bản tin là việc của sản phẩm
+// (vd. products/hw_bringup/mavlink_dialect.cpp).
+// Offset theo thứ tự trên dây; CRC_EXTRA khớp mavgen – kiểm tra chéo: python3 tools/mavlink/mavlink_dialect.py --check
 #include <cstring>
 
 #include "mavlink2/codec.hpp"
 
-namespace product::mavmsg {
+namespace mavlink2::bringup {
 
-using namespace mavlink2::wire;
+using namespace ::mavlink2::wire;
 
 struct BringupStatus {
     static constexpr std::uint32_t kId = 62000;
@@ -130,4 +133,13 @@ struct GnssFix {
     }
 };
 
-}  // namespace product::mavmsg
+// CRC_EXTRA của các bản tin dialect mà THIẾT BỊ nhận (phía giao diện gửi xuống) – cho Parser.
+inline bool rx_crc_extra(std::uint32_t msgid, std::uint8_t& out) {
+    if (msgid == OutputSet::kId) {
+        out = OutputSet::kCrcExtra;
+        return true;
+    }
+    return false;
+}
+
+}  // namespace mavlink2::bringup

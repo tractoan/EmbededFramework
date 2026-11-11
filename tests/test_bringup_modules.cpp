@@ -3,7 +3,7 @@
 #include <cmath>
 
 #include "bringup_events.hpp"
-#include "bringup_messages.hpp"
+#include "mavlink2/bringup/messages.hpp"
 #include "imu_bringup/imu_bringup.hpp"
 #include "io_bringup/io_bringup.hpp"
 #include "mavlink_dialect.hpp"
@@ -443,7 +443,7 @@ TEST(bringup_dialect_maps_events_and_messages) {
 
     if (tx.sent.size() >= 5) {
         const auto& p = tx.sent[0].payload;
-        CHECK_EQ(tx.sent[0].id, product::mavmsg::ImuData::kId);
+        CHECK_EQ(tx.sent[0].id, mavlink2::bringup::ImuData::kId);
         CHECK_EQ(mavlink2::wire::get_u32(p.data(), 4), 77u);
         CHECK(mavlink2::wire::get_f32(p.data(), 12) == 1.5f && mavlink2::wire::get_f32(p.data(), 32) == -9.8f);
         CHECK(p[44] == 1 && p[45] == 2 && p[47] == 3 && p[50] == 0x5A);
@@ -457,8 +457,8 @@ TEST(bringup_dialect_maps_events_and_messages) {
 
     // OUTPUT_SET -> kOutputSetRequest
     mavlink2::Message m;
-    m.msgid = product::mavmsg::OutputSet::kId;
-    product::mavmsg::OutputSet os;
+    m.msgid = mavlink2::bringup::OutputSet::kId;
+    mavlink2::bringup::OutputSet os;
     os.mask = 0xC00; os.value = 0x400;
     os.pack(m.payload);
     d.on_message(m, services, tx);

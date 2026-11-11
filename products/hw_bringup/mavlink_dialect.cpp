@@ -4,11 +4,12 @@
 #include <cstring>
 
 #include "bringup_events.hpp"
-#include "bringup_messages.hpp"
+#include "mavlink2/bringup/messages.hpp"
 
 namespace product {
 
-namespace bu = app::bringup;
+namespace bu     = app::bringup;
+namespace mavmsg = mavlink2::bringup;   // định nghĩa bản tin dialect (communication/mavlink2/dialects/bringup)
 using namespace mavlink2;
 
 namespace {
@@ -26,12 +27,7 @@ std::uint8_t gps_fix_type(const device::GnssFix& f) {
 }  // namespace
 
 bool BringupDialect::crc_extra(std::uint32_t msgid, std::uint8_t& out) const {
-    // Chỉ bản tin giao diện GỬI xuống mới cần (bản tin chuẩn giao thức đã biết).
-    if (msgid == mavmsg::OutputSet::kId) {
-        out = mavmsg::OutputSet::kCrcExtra;
-        return true;
-    }
-    return false;
+    return mavmsg::rx_crc_extra(msgid, out);   // chỉ bản tin giao diện GỬI XUỐNG (bản tin chuẩn giao thức đã biết)
 }
 
 void BringupDialect::on_event(const msg::Event& e, Sender& tx) {
