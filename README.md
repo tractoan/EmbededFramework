@@ -139,9 +139,10 @@ EmbededFramework/
 │       ├── qnx/                # như linux_sim + mlockall, kiểm tra quyền priority, bỏ qua SIGPIPE
 │       └── common/{stm32f4,freertos}/   # clock_config.c; hook cấp phát tĩnh FreeRTOS dùng chung
 ├── messaging/
-│   └── include/messaging/      # event, event_bus, buffer, buffer_allocators     (ep_messaging)
+│   └── include/messaging/      # event, event_bus, buffer, buffer_allocators, topic (ep_messaging)
 ├── services/
-│   └── include/services/       # param_store, param_cli, command_service, logger, led_service
+│   └── include/services/       # param_store, param_cli, command_service, logger, led_service,
+│                               # sensor_scheduler (ISensorTask, SensorTask<>, SensorScheduler, SensorHub)
 ├── communication/
 │   ├── link/                   # byte_stream, protocol, link_manager      (ep_comm)
 │   ├── net/                    # tcp_server/tcp_client/udp stream         (ep_comm_net, khi có mạng)
@@ -233,6 +234,46 @@ void on_event(const msg::Event& e) {                                      // m�
   Ví dụ: `thermo_pro` = pool 64 B×16 / 512 B×8 / 2 KB×4 (lô tối đa 1000 mẫu); `thermo_lite` = một pool 128 B×4 (52 mẫu).
   Allocator thread-safe (vùng găng ngắn); **chưa** hỗ trợ cấp phát trong ISR.
 
+### Dữ liệu tần số cao: `msg::Topic<T>`
+
+EventBus dành cho **sự kiện rời rạc** (đổi trạng thái, lỗi, lệnh). Dòng dữ liệu đều đặn tần số cao (mẫu cảm
+biến, trạng thái ước lượng, setpoint) đi qua `msg::Topic<T>` – kênh **giá trị mới nhất**, không hàng đợi:
+
+```cpp
+static msg::Topic<ImuSample> imu;                  // product sở hữu, truyền tham chiếu cho hai phía
+imu.publish(sample, osal::now_ms());               // MỘT bên ghi
+ImuSample s; msg::TopicStamp st;
+if (core::is_ok(imu.read(s, &st)) && st.sequence != last_seq) { last_seq = st.sequence; /* mẫu mới */ }
+```
+
+Seqlock trên các word `std::atomic`: nhiều bên đọc, không khóa, không cấp phát, không bản chụp rách.
+`read()` trả `NotFound` (chưa có dữ liệu) hoặc `Busy` khi bên ghi đang ghi dở – **không quay chờ vô hạn**
+(trên RTOS đơn lõi, bên đọc priority cao ngắt bên ghi giữa chừng sẽ treo nếu quay mãi); bên đọc dùng giá
+trị trước và đọc lại chu kỳ sau.
+
+### Lấy mẫu cảm biến: `SensorScheduler` (plug-in, đóng với sửa đổi)
+
+```cpp
+static msg::Topic<std::int32_t> temp_topic;
+static svc::SensorTask<device::ITemperatureSensor, std::int32_t,
+                       &device::ITemperatureSensor::read_deci_celsius> temp{"tmp102", tmp102, temp_topic, 500};
+static svc::SensorScheduler env;                    // một thread cho cả nhóm
+env.add(&temp);                                     // thêm cảm biến = thêm task, không sửa scheduler
+s.sensors.add(&env, {"snsr_env", osal::Priority::High, 2048, nullptr});   // trong product::setup()
+```
+
+| Thành phần | Trách nhiệm |
+|---|---|
+| `ISensorTask` | Một nguồn dữ liệu: `sample(now)` đọc device, đẩy ra topic |
+| `SensorTask<Device, Sample, &Device::read>` | Adapter tổng quát – một dòng khai báo cho mỗi cảm biến |
+| `SensorScheduler` | Một thread chạy một **nhóm** task: lịch **không trôi** (lỡ ≥ 1 chu kỳ → đếm overrun, đặt lại lịch, không chạy dồn), sức khỏe từng task (ok / lỗi / lỗi liên tiếp / overrun / thời gian đọc dài nhất); N lỗi liên tiếp → `svc::evt::kSensorFault`, đọc tốt lại → `kSensorRecovered` (EventBus) |
+| `SensorHub` | `System` giữ; khởi động các nhóm trước module, dừng sau kênh; `sys sensors` in sức khỏe |
+
+Nhóm theo **bus và nhịp**, không theo loại cảm biến: task trong một nhóm chạy tuần tự – cảm biến I2C chậm đặt
+chung nhóm với IMU 1 kHz sẽ làm trễ IMU. Độ phân giải theo đồng hồ OSAL (1 ms); nhanh hơn 1 kHz hoặc jitter
+dưới 1 ms cần ngắt DRDY / timer phần cứng (chưa có). Cảm biến dạng dòng byte (GNSS, máy thu RC) chưa có
+adapter – dự kiến `StreamSensorTask<Parser>`.
+
 ### Trình tự khởi động (`app::System::init`)
 
 1. `board.init()` → gắn console vào Logger
@@ -241,7 +282,8 @@ void on_event(const msg::Event& e) {                                      // m�
 4. Bring-up thiết bị: driver gắn lên bus HAL (`Tmp102` ← `II2c`) → `Devices`
 5. `product::setup()` → thêm module + khai báo kênh/giao thức; rồi `on_init()` từng module (đăng ký tham số, lệnh)
 6. `params.load()` từ NV, gồm cả lựa chọn giao thức `comm.<kênh>` (CRC sai/không có → giữ mặc định)
-7. Start service → `on_start()` từng module → `links.start()` (mỗi kênh bật giao thức đã chọn) → publish `kSystemStarted`
+7. Start service → các nhóm cảm biến (`SensorHub`) → `on_start()` từng module → `links.start()` (mỗi kênh bật
+   giao thức đã chọn) → publish `kSystemStarted`. Khi dừng: kênh → cảm biến → module.
 8. `osal::end_startup()`: **niêm phong bộ nhớ** – từ đây cấm heap và cấm lấy thêm stack (xem dưới)
 
 Nếu bước 7 thất bại (vd. vùng stack không đủ), các thread đã khởi động được dừng sạch và lỗi chỉ rõ task nào,

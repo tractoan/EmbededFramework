@@ -2,6 +2,7 @@
 #include "app/module_manager.hpp"
 #include "comm/link_manager.hpp"
 #include "hal/board.hpp"
+#include "services/sensor_scheduler.hpp"
 
 namespace app {
 
@@ -21,6 +22,7 @@ struct ProductSetup {
     hal::IBoard& board;          // để lấy thêm cổng (vd. UartId::Aux)
     comm::IByteStream& console;  // cổng console đã sẵn sàng
     TaskPlan& tasks;             // priority/stack của task framework
+    svc::SensorHub& sensors;     // nhóm lấy mẫu cảm biến (SensorScheduler) – System khởi động/dừng
 };
 
 }  // namespace app
