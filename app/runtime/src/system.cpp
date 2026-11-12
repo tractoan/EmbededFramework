@@ -154,8 +154,10 @@ int System::SysCli::on_command(int argc, char** argv, svc::CommandOutput& out) {
             out.print("  group '%s' %s\r\n", sys_.sensors_.thread_name(g), grp->running() ? "running" : "stopped");
             svc::SensorHealth h;
             for (std::size_t i = 0; grp->health(i, h); ++i) {
-                out.print("    %-10s %5lu ms ok=%lu err=%lu overrun=%lu max=%lu ms %s%s\r\n", h.name,
-                          static_cast<unsigned long>(h.period_ms), static_cast<unsigned long>(h.samples_ok),
+                const bool blk = h.mode == svc::SamplingMode::Blocking;
+                out.print("    %-10s %-8s %5lu ms ok=%lu err=%lu overrun=%lu max=%lu ms %s%s\r\n", h.name,
+                          blk ? "blocking" : "periodic", static_cast<unsigned long>(h.period_ms),
+                          static_cast<unsigned long>(h.samples_ok),
                           static_cast<unsigned long>(h.errors), static_cast<unsigned long>(h.overruns),
                           static_cast<unsigned long>(h.max_exec_ms), h.faulted ? "FAULT " : "",
                           h.errors ? core::to_string(h.last_error) : "");

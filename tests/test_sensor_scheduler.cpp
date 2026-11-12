@@ -208,12 +208,14 @@ TEST(sensor_task_adapts_interface_method) {
     svc::SensorTask<device::ITemperatureSensor, std::int32_t, &device::ITemperatureSensor::read_deci_celsius> task(
         "tmp", sensor, t, 500);
     sensor.value = 315;
-    CHECK(core::is_ok(task.sample(42)));
+    g_clock      = 42;
+    CHECK(core::is_ok(task.sample(&fake_clock)));
     std::int32_t v = 0;
     msg::TopicStamp st;
     CHECK(core::is_ok(t.read(v, &st)) && v == 315 && st.timestamp_ms == 42);
     sensor.fail = true;
-    CHECK(task.sample(43) == core::Status::Timeout);
+    g_clock = 43;
+    CHECK(task.sample(&fake_clock) == core::Status::Timeout);
     CHECK(core::is_ok(t.read(v, &st)) && v == 315 && st.timestamp_ms == 42);
 }
 

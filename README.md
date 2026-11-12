@@ -264,15 +264,25 @@ s.sensors.add(&env, {"snsr_env", osal::Priority::High, 2048, nullptr});   // tro
 
 | Thành phần | Trách nhiệm |
 |---|---|
-| `ISensorTask` | Một nguồn dữ liệu: `sample(now)` đọc device, đẩy ra topic |
-| `SensorTask<Device, Sample, &Device::read>` | Adapter tổng quát – một dòng khai báo cho mỗi cảm biến |
+| `ISensorTask` | Một nguồn dữ liệu: `mode()` (định kỳ / chặn), `sample(clock)` đọc device, đẩy ra topic |
+| `SensorTask<Device, Sample, &Device::read>` | **Định kỳ** (polling): `read(Sample&)` – một dòng khai báo cho mỗi cảm biến |
+| `BlockingSensorTask<Device, Sample, &Device::read>` | **Chặn**: `read(Sample&, timeout_ms)` tự chờ dữ liệu, vd. semaphore do ISR DRDY `give_from_isr()` |
+| `StreamSensorTask<Parser, Sample>` | **Chặn, dòng byte**: đọc `hal::IUart`, đưa từng byte vào parser (`bool feed(byte, Sample&)`) – GNSS (NMEA/UBX), máy thu RC (SBUS/CRSF); mẫu cắt ngang giữa hai lần đọc vẫn ghép đúng, nhiều mẫu một lần đọc thì publish từng mẫu |
 | `SensorScheduler` | Một thread chạy một **nhóm** task: lịch **không trôi** (lỡ ≥ 1 chu kỳ → đếm overrun, đặt lại lịch, không chạy dồn), sức khỏe từng task (ok / lỗi / lỗi liên tiếp / overrun / thời gian đọc dài nhất); N lỗi liên tiếp → `svc::evt::kSensorFault`, đọc tốt lại → `kSensorRecovered` (EventBus) |
 | `SensorHub` | `System` giữ; khởi động các nhóm trước module, dừng sau kênh; `sys sensors` in sức khỏe |
 
-Nhóm theo **bus và nhịp**, không theo loại cảm biến: task trong một nhóm chạy tuần tự – cảm biến I2C chậm đặt
-chung nhóm với IMU 1 kHz sẽ làm trễ IMU. Độ phân giải theo đồng hồ OSAL (1 ms); nhanh hơn 1 kHz hoặc jitter
-dưới 1 ms cần ngắt DRDY / timer phần cứng (chưa có). Cảm biến dạng dòng byte (GNSS, máy thu RC) chưa có
-adapter – dự kiến `StreamSensorTask<Parser>`.
+| Cơ chế | Lập lịch | Khi nào dùng |
+|---|---|---|
+| **Định kỳ** (polling) | Scheduler gọi `sample()` mỗi chu kỳ, lịch **không trôi**; nhiều task dùng chung một thread | Cảm biến đọc theo yêu cầu (I2C/SPI): nhiệt độ, áp suất, từ trường |
+| **Chặn** (blocking read) | `sample()` tự chờ dữ liệu tối đa timeout (`period_ms()`); task chặn **chiếm trọn một nhóm** (`add()` từ chối trộn); có dữ liệu là đọc ngay, timestamp lấy **lúc dữ liệu đến** | Cảm biến tự báo có dữ liệu (DRDY), dòng byte UART, thiết bị tự phát |
+
+Với task chặn: hết timeout không có dữ liệu = lỗi `Timeout` → N lần liên tiếp → `kSensorFault` (dữ liệu cũ).
+Lỗi trả về **ngay** thay vì chờ (UART đóng, bus lỗi) → scheduler nghỉ phần còn lại của timeout, không quay
+chiếm CPU. Dừng nhóm chặn mất tối đa một timeout.
+
+Nhóm định kỳ theo **bus và nhịp**, không theo loại cảm biến: task trong một nhóm chạy tuần tự – cảm biến I2C
+chậm đặt chung nhóm với IMU 1 kHz sẽ làm trễ IMU. Lịch định kỳ theo đồng hồ OSAL (1 ms); nhanh hơn 1 kHz hoặc
+jitter dưới 1 ms: dùng task **chặn** chờ ngắt DRDY.
 
 ### Trình tự khởi động (`app::System::init`)
 

@@ -13,17 +13,39 @@ constexpr std::uint32_t kPollMs = 50;   // chờ tối đa mỗi vòng để k�
 core::Status SensorScheduler::add(ISensorTask* task) {
     if (task == nullptr || task->period_ms() == 0) return core::Status::InvalidArg;
     if (running_.load()) return core::Status::Busy;
+    // Task chặn chiếm trọn thread: không trộn với task khác (nó sẽ làm trễ cả nhóm).
+    const bool is_blocking = task->mode() == SamplingMode::Blocking;
+    if (count_ > 0 && (is_blocking || slots_[0].task->mode() == SamplingMode::Blocking)) {
+        LOGE(kTag, "'%s': a blocking sensor task needs its own SensorScheduler", task->name());
+        return core::Status::InvalidArg;
+    }
     if (count_ >= slots_.size()) return core::Status::NoMemory;
-    Slot& s          = slots_[count_++];
-    s.task           = task;
-    s.health.name    = task->name();
+    Slot& s            = slots_[count_++];
+    s.task             = task;
+    s.health.name      = task->name();
     s.health.period_ms = task->period_ms();
+    s.health.mode      = task->mode();
     return core::Status::Ok;
 }
 
 std::uint64_t SensorScheduler::now() const { return cfg_.clock != nullptr ? cfg_.clock() : osal::now_ms(); }
+SensorClock SensorScheduler::clock() const { return cfg_.clock != nullptr ? cfg_.clock : &osal::now_ms; }
+
+std::uint32_t SensorScheduler::run_blocking_once() {
+    const std::uint64_t start  = now();
+    const core::Status st      = slots_[0].task->sample(clock());   // tự chờ dữ liệu, tối đa timeout của task
+    const std::uint64_t after  = now();
+    const std::uint32_t exec   = after > start ? static_cast<std::uint32_t>(after - start) : 0u;
+    const std::uint32_t period = slots_[0].task->period_ms();
+    record(0, st, after, exec, false);
+    // Lỗi trả về NGAY (UART đóng, bus lỗi...) thay vì chờ: nghỉ phần còn lại của timeout, nếu không thread
+    // priority cao sẽ quay liên tục và chiếm CPU. Có dữ liệu thì đọc tiếp ngay.
+    return (!core::is_ok(st) && exec < period) ? period - exec : 0u;
+}
 
 std::uint32_t SensorScheduler::run_due() {
+    if (count_ == 0) return kPollMs;
+    if (blocking()) return run_blocking_once();
     for (std::size_t i = 0; i < count_; ++i) {
         Slot& s                    = slots_[i];
         const std::uint32_t period = s.task->period_ms();
@@ -33,7 +55,7 @@ std::uint32_t SensorScheduler::run_due() {
             s.scheduled = true;
         }
         if (start < s.next_due) continue;
-        const core::Status st     = s.task->sample(start);
+        const core::Status st     = s.task->sample(clock());
         const std::uint64_t after = now();
         const std::uint32_t exec  = after > start ? static_cast<std::uint32_t>(after - start) : 0u;
         // Không trôi: mốc kế tiếp tính từ mốc trước. Đã trễ hơn một chu kỳ trọn vẹn (mốc đó cũng đã qua)
@@ -116,9 +138,16 @@ void SensorScheduler::stop() {
 
 void SensorScheduler::run() {
     while (running_.load()) {
-        const std::uint32_t wait = run_due();
-        if (wait > 0) osal::sleep_ms(wait < kPollMs ? wait : kPollMs);
-        else osal::yield();
+        std::uint32_t wait = run_due();
+        if (wait == 0) {
+            osal::yield();
+            continue;
+        }
+        while (wait > 0 && running_.load()) {   // ngủ ĐỦ, chia lát để kịp thấy yêu cầu dừng
+            const std::uint32_t step = wait < kPollMs ? wait : kPollMs;
+            osal::sleep_ms(step);
+            wait -= step;
+        }
     }
 }
 
