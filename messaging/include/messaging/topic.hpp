@@ -7,7 +7,8 @@
 //   ImuSample s; msg::TopicStamp st;
 //   if (core::is_ok(imu.read(s, &st)) && st.sequence != last_seq) { last_seq = st.sequence; ... }
 //
-// Hiện thực: seqlock trên các word std::atomic (không data race theo mô hình bộ nhớ C++, sạch dưới TSan),
+// Hiện thực: seqlock trên các word std::atomic, thứ tự chỉ bằng acquire/release trên chính các atomic
+// (không dùng fence đứng riêng – TSan mô hình hóa đầy đủ; đúng trên ARM/thứ tự bộ nhớ yếu),
 // không khóa, không cấp phát, ghi O(sizeof T).
 //  - MỘT bên ghi tại một thời điểm (nhiều bên ghi -> tự khóa bên ngoài). Nhiều bên đọc.
 //  - Đọc KHÔNG bao giờ quay vô hạn: trên RTOS đơn lõi, bên đọc priority cao có thể ngắt bên ghi giữa
@@ -45,8 +46,8 @@ public:
         std::memcpy(&buf[kHeaderWords], &value, sizeof(T));
 
         const std::uint32_t s = seq_.load(std::memory_order_relaxed);
-        seq_.store(s + 1, std::memory_order_relaxed);          // lẻ: đang ghi
-        std::atomic_thread_fence(std::memory_order_release);
+        // lẻ: đang ghi. RMW acq_rel: các lệnh ghi dữ liệu phía sau không thể bị đưa lên trước nó.
+        seq_.exchange(s + 1, std::memory_order_acq_rel);
         for (std::size_t i = 0; i < kWords; ++i) words_[i].store(buf[i], std::memory_order_relaxed);
         std::uint32_t done = s + 2;                             // chẵn: xong
         if (done == 0) done = 2;                                // quay vòng (~24 ngày ở 1 kHz): 0 dành cho "chưa có"
@@ -60,8 +61,8 @@ public:
             if (s1 == 0) return core::Status::NotFound;
             if ((s1 & 1u) != 0) continue;                         // đang ghi
             std::uint32_t buf[kWords];
-            for (std::size_t i = 0; i < kWords; ++i) buf[i] = words_[i].load(std::memory_order_relaxed);
-            std::atomic_thread_fence(std::memory_order_acquire);
+            // acquire: lần đọc lại seq_ phía sau không thể bị đưa lên trước các lần đọc dữ liệu.
+            for (std::size_t i = 0; i < kWords; ++i) buf[i] = words_[i].load(std::memory_order_acquire);
             if (seq_.load(std::memory_order_relaxed) != s1) continue;   // bị ghi đè trong lúc đọc
             std::memcpy(&out, &buf[kHeaderWords], sizeof(T));
             if (stamp != nullptr) {
