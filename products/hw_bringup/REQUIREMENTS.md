@@ -1,5 +1,8 @@
 # Yêu cầu – Firmware bring-up phần cứng (`hw_bringup`)
 
+> Yêu cầu của **framework** (lớp, bộ nhớ, HAL, giao thức…) nằm ở [`docs/REQUIREMENTS.md`](../../docs/REQUIREMENTS.md);
+> sản phẩm này tương ứng PROD-005…007 ở đó. File này giữ yêu cầu **của sản phẩm** (SER/GNS/DIO/IMU/MAV…).
+
 > **Cách dùng file này**
 > - Đây là nguồn yêu cầu chính của sản phẩm `products/hw_bringup`. Sửa trực tiếp các mục bên dưới, rồi đưa file vào prompt, ví dụ:
 >   *"Cập nhật firmware theo `products/hw_bringup/REQUIREMENTS.md`, chỉ những mục có trạng thái `Mới` hoặc `Sửa`."*
@@ -160,6 +163,7 @@
 | 2026-11-09 | | GNS-08: giải mã NMEA (GGA/RMC) gửi giờ UTC, lat, lon lên PC qua `GNSS_FIX` + `GPS_RAW_INT`. |
 | 2026-11-09 | | Tách GNSS: `svc::GnssReceiver` (service: đọc/giải mã NMEA, gửi lệnh) + `app::GnssBringup` (business: luật 5 s, báo cáo); `SerialBringup` chỉ còn loopback. Không đổi yêu cầu. |
 | 2026-11-13 | | Cập nhật theo main (SensorScheduler, Topic, Actuator): IMU đọc qua `SensorScheduler` + `msg::Topic`, driver `device::HdlcImu` không thread. DO chưa chuyển sang `Actuator` (cần quyết định arm/deadman). Không đổi yêu cầu. |
+| 2026-11-13 | | Cập nhật theo main (đặc tả yêu cầu framework `docs/REQUIREMENTS.md`): bổ sung các yêu cầu tầng framework của nhánh (HAL-012…015, DEV-003…006, SVC-008/009, COMM-008/009, TGT-007, PROD-005…007, DEF-011…016). |
 | | | |
 
 ---
