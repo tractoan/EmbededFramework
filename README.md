@@ -49,14 +49,14 @@ Mục tiêu:
 │  Thread · Mutex · Semaphore      │  IGpio · IUart · II2c · INvStorage  │
 │                                  │  IHdlcPort (SDLC/HDLC)              │
 │  Queue<T,N> · time · Critical    │  IBoard (ID logic -> chân vật lý)   │
-│  ports: posix·freertos·ucos2/3   │  ports: sim·stm32f4·zynqmp·qnx      │
+│  ports: posix·freertos·ucos2/3   │  ports: sim·stm32·zynqmp·qnx·nios2  │
 │                                  │         linux_cpu (bring-up)        │
 ├──────────────────────────────────┴─────────────────────────────────────┤
 │ CORE (core/)   Status · NonCopyable · config.hpp · compiler macros     │
 └────────────────────────────────────────────────────────────────────────┘
  UTILS (utils/) – thư viện độc lập, mọi lớp đều dùng được:
    crc32/crc16 · fixed-point format · RingBuffer (SPSC)
-   Vendor SDK / Kernel: STM32Cube HAL, FreeRTOS, Zephyr, Linux, QNX, ESP-IDF...
+   Vendor SDK / Kernel: STM32Cube HAL, Xilinx BSP, Intel Nios II HAL, FreeRTOS, uC/OS, Linux, QNX...
 ```
 
 | Lớp | Trách nhiệm | KHÔNG được làm | Cơ chế đa hình |
@@ -112,9 +112,10 @@ Lớp dưới không bao giờ biết lớp trên; giao tiếp ngược lên ch�
 EmbededFramework/
 ├── CMakeLists.txt              # EP_TARGET, EP_PRODUCT
 ├── main.cpp                    # entry point duy nhất (mọi target, mọi sản phẩm)
-├── cmake/targets/              # linux_sim, linux_cpu, stm32f4_{freertos,ucos2,ucos3}, zynqmp_{a53_linux,r5_freertos}, qnx
+├── cmake/targets/              # linux_sim, linux_cpu, stm32f4_{freertos,ucos2,ucos3}, zynqmp_{a53_linux,r5_freertos}, qnx,
+│                               # nios2_ucos2
 │   └── common/stm32f4_cube.cmake   # phần CubeMX dùng chung cho mọi target STM32F4
-├── cmake/toolchains/           # arm-none-eabi, armr5-none-eabi, aarch64-linux-gnu, qnx (qcc)
+├── cmake/toolchains/           # arm-none-eabi, armr5-none-eabi, aarch64-linux-gnu, qnx (qcc), nios2-elf
 ├── utils/include/utils/        # crc.hpp, fixed_point.hpp, ring_buffer.hpp  (độc lập)
 ├── platform/                   # TẦNG NỀN TẢNG
 │   ├── core/include/core/      # status.hpp, config.hpp, noncopyable.hpp, compiler.hpp
@@ -128,13 +129,16 @@ EmbededFramework/
 │   │       │   ├── posix/      #   mọi OS POSIX: console stdio, UART termios, FileStorage
 │   │       │   ├── linux/      #   Linux: /dev/i2c-N, GPIO chardev v2
 │   │       │   ├── qnx/        #   QNX: I2C resource manager (devctl), GPIO thanh ghi (mmap_device_memory)
-│   │       │   └── mmio/       #   GPIO thanh ghi memory-mapped, header-only (test được trên host)
+│   │       │   ├── mmio/       #   GPIO thanh ghi memory-mapped, header-only (test được trên host)
+│   │       │   ├── flash/      #   INvStorage trên vùng flash NOR (xóa theo block), header-only
+│   │       │   └── fdio/       #   UART qua file descriptor không chặn (HAL Nios II)
 │   │       ├── linux_sim/      # PC: cảm biến/GPIO giả lập (+ 12 serial, 20 DI/DO, 2 IMU cho hw_bringup)
 │   │       ├── linux_cpu/      # CPU Linux của bo bring-up: tty RS485, GPIO bias/active-low, SDLC/HDLC
 │   │       ├── stm32f4/        # STM32Cube HAL
 │   │       ├── zynqmp_linux/   # Zynq UltraScale+ APU (Cortex-A53) chạy Linux
 │   │       ├── zynqmp_r5/      # Zynq UltraScale+ RPU (Cortex-R5F): XGpioPs, XUartPs, XIicPs, EEPROM 24xx
-│   │       └── qnx/            # mọi board có BSP QNX: cấu hình thiết bị bằng biến môi trường
+│   │       ├── qnx/            # mọi board có BSP QNX: cấu hình thiết bị bằng biến môi trường
+│   │       └── nios2/          # Intel Nios II: PIO, JTAG UART/UART, I2C (Avalon/OpenCores), flash HAL
 │   ├── net/                    # TCP/IP: include/net/net.hpp, ports/{posix,lwip}
 │   ├── device/
 │   │   └── include/device/     # temperature_sensor, tmp102, digital_io, imu (+ImuFormat), hdlc_imu, nmea
@@ -148,6 +152,7 @@ EmbededFramework/
 │       ├── zynqmp_a53_linux/   # như linux_sim + mlockall, kiểm tra quyền SCHED_FIFO
 │       ├── zynqmp_r5_freertos/ # task init + scheduler (BSP Xilinx khởi tạo clock/GIC/tick)
 │       ├── qnx/                # như linux_sim + mlockall, kiểm tra quyền priority, bỏ qua SIGPIPE
+│       ├── nios2_ucos2/        # task init + OSStart (BSP đã gọi OSInit và cài tick trước main)
 │       └── common/{stm32f4,freertos}/   # clock_config.c; hook cấp phát tĩnh FreeRTOS dùng chung
 ├── messaging/
 │   └── include/messaging/      # event, event_bus, buffer, buffer_allocators, topic (ep_messaging)
@@ -913,6 +918,46 @@ công khai) và một lớp giả lập `devctl`/`mmap_device_memory` trên Linu
 Logic GPIO thanh ghi có unit test riêng chạy trên mọi host (kể cả hai thread cùng đọc-sửa-ghi một thanh ghi),
 được fuzz 1 triệu chuỗi cấu hình dưới ASan/UBSan và kiểm chứng bằng mutation test (mọi lỗi cài vào đều bị test
 bắt). Toàn bộ unit test chạy sạch dưới ThreadSanitizer.
+
+### Intel (Altera) Nios II + uC/OS-II
+
+Target `nios2_ucos2` cho CPU soft-core Nios II trên FPGA, BSP sinh bằng Nios II Software Build Tools (loại
+**UCOSII**). Lưu ý: Intel đã ngừng phát triển Nios II (khuyến nghị Nios V – RISC-V); Nios II EDS chỉ còn trong
+Quartus Prime Standard/Lite bản cũ.
+
+| Thành phần | Hiện thực | Cấu hình (macro, mặc định lấy từ `system.h`) |
+|---|---|---|
+| OSAL | port `ucos2` – BSP đã gọi `OSInit()` (`ALT_OS_INIT`) và cài tick trước `main()`, target **không** gọi lại | BSP: `ucosii.os_lowest_prio` ≥ 53 (mặc định 20 – build báo lỗi rõ) |
+| Console / Aux | `FdUart`: HAL file descriptor không chặn (`/dev/jtag_uart`, `/dev/uart_0`) – driver HAL nhận byte bằng ngắt nên đọc thăm dò không mất dữ liệu | `EP_NIOS2_CONSOLE_DEV` (`JTAG_UART_NAME`), `EP_NIOS2_AUX_DEV` (tắt) |
+| LED / nút | `PioPin`: core PIO qua `IORD/IOWR` (bỏ qua data cache); PIO chỉ-xuất dùng **bản sao** chung cho các chân cùng PIO; vùng găng = tắt ngắt | `EP_NIOS2_LED_PIO_BASE` (`LED_BASE`…), bit 0/1, `EP_NIOS2_LED_ACTIVE_LOW`, `EP_NIOS2_LED_SET_CLEAR`; `EP_NIOS2_BUTTON_PIO_BASE` (`KEY_BASE`…) |
+| I2C | Intel Avalon I2C (`alt_avalon_i2c_master_*`) **hoặc** OpenCores I2C (`I2C_start/write/read`), có repeated start; khóa bus chờ có nhường CPU | `EP_NIOS2_I2C_AVALON=1` + `EP_NIOS2_I2C_NAME`, hoặc `EP_NIOS2_I2C_OPENCORES=1` + `EP_NIOS2_I2C_BASE`, `EP_NIOS2_I2C_CLK_HZ` |
+| NV storage | `FlashRegionStorage` trên HAL flash API (EPCQ/EPCS, on-chip flash MAX 10, CFI): xóa theo block, chỉ lập trình + đọc lại kiểm tra | `EP_NIOS2_FLASH_DEV`, `EP_NIOS2_FLASH_OFFSET`, `EP_NIOS2_FLASH_SIZE` (căn biên block) |
+| Reset | nhảy về `NIOS2_RESET_ADDR` (chỉ reset phần mềm – dùng watchdog để reset phần cứng) | – |
+
+```bash
+nios2-bsp ucosii build/bsp design.sopcinfo --set ucosii.os_lowest_prio 63 --set hal.enable_c_plus_plus true
+make -C build/bsp
+cmake -B build-nios2 -DEP_TARGET=nios2_ucos2 -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/nios2-elf.cmake \
+      -DEP_NIOS2_BSP_DIR=build/bsp \
+      -DEP_NIOS2_DEFINES="EP_NIOS2_I2C_OPENCORES=1;EP_NIOS2_I2C_BASE=I2C_0_BASE;EP_NIOS2_FLASH_DEV=\"/dev/onchip_flash\""
+cmake --build build-nios2 -j
+nios2-download -g build-nios2/firmware.elf && nios2-terminal
+```
+Cờ CPU (`-mhw-mul`, `-mno-hw-div`, FPU custom…), định nghĩa (`-D__ucosii__`…) và tên thư viện BSP được **đọc từ
+`public.mk`** của BSP – luôn khớp cấu hình CPU trong Platform Designer.
+
+Giới hạn: driver OpenCores I2C của Intel chờ vòng **không timeout** (bus kẹt sẽ treo task gọi); bit của PIO LED
+không do framework quản lý được ghi theo bản sao – dành trọn PIO cho framework hoặc bật OUTSET/OUTCLEAR.
+
+**Mức độ kiểm chứng:** không có `nios2-elf-gcc` (proxy chặn mã nguồn GNU và toolchain dựng sẵn) nên **chưa biên
+dịch bằng toolchain Nios II và chưa chạy trên FPGA**. Đã làm:
+- biên dịch toàn bộ framework cho target `nios2_ucos2` bằng g++ host với **header thật** của một BSP Nios II
+  công khai (board DECA: `system.h`, HAL, driver, uC/OS-II bản Nios) – cả hai loại I2C; bước này bắt được hai lỗi
+  thật (port uC/OS-II gọi `OS_CPU_SR_Save` chỉ có ở port ARM; mã trạng thái Avalon I2C không dấu so với hằng âm);
+- chạy firmware trên host với kernel uC/OS-II giả lập + HAL Nios giả lập (không nằm trong repo): đọc nhiệt độ
+  qua I2C OpenCores (repeated start), CLI qua JTAG UART giả, tham số lưu flash còn sau khởi động lại, LED cảnh
+  báo theo mức;
+- unit test chạy trên mọi host cho PIO, flash NOR (kể cả vùng có cỡ block khác nhau) và `FdUart` (pty).
 
 ---
 
