@@ -10,6 +10,9 @@ Mục tiêu:
 - Phù hợp embedded: không exception, không RTTI, **không cấp phát động sau khi khởi động** (được kiểm chứng lúc chạy
   bằng bộ chặn heap), tài nguyên tĩnh, **priority của từng task cấu hình được** (16 mức, giống nhau trên mọi RTOS).
 
+Đặc tả yêu cầu có mã truy vết (nguồn, hiện thực, test, trạng thái kiểm chứng, lỗi đã biết, backlog):
+[`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md).
+
 ---
 
 ## 1. Tổng quan các lớp
