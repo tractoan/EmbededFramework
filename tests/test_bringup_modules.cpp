@@ -358,29 +358,29 @@ TEST(io_bringup_outputs_and_inputs) {
 
 TEST(imu_bringup_reports_samples_and_failures) {
     struct FakeImu final : device::IImu {
-        bool fail_start = false, has = false;
+        core::Status port = core::Status::Ok;
         device::ImuStats st{};
-        device::ImuSample s{};
         const char* format_name() const override { return "ln200"; }
         std::uint8_t type_id() const override { return 1; }
-        core::Status start() override { return fail_start ? core::Status::NotFound : core::Status::Ok; }
-        void stop() override {}
-        bool latest(device::ImuSample& out) const override { out = s; return has; }
+        core::Status status() const override { return port; }
+        core::Status read(device::ImuSample&, std::uint32_t) override { return core::Status::Timeout; }
         device::ImuStats stats() const override { return st; }
     } a, b;
-    b.fail_start = true;
-    device::IImu* list[] = {&a, &b};
+    b.port = core::Status::NotFound;
+    msg::Topic<device::ImuSample> ta, tb;   // mẫu do nhóm lấy mẫu publish (ở đây: test publish)
+    const app::ImuBringup::Channel list[] = {{&a, &ta}, {&b, &tb}};
     Ctx c;
     app::ImuBringup m(list, 2);
     CHECK(core::is_ok(m.on_init(c.ctx)));
     CHECK(core::is_ok(m.on_start()));   // IMU lỗi không làm hỏng khởi động
-    CHECK(c.has_text("IMU1 (ln200): start failed"));
+    CHECK(c.has_text("IMU1 (ln200): port failed"));
     CHECK_EQ(m.tick_period_ms(), 100u);
 
     const std::uint64_t now = osal::now_ms() + 1000;
-    a.has = true;
     a.st.frames = 400; a.st.rate_hz = 400; a.st.last_frame_ms = now - 10;
-    a.s.gyro[2] = 0.17f; a.s.raw_len = 2; a.s.raw[0] = 0xAB;
+    device::ImuSample sa{};
+    sa.gyro[2] = 0.17f; sa.raw_len = 2; sa.raw[0] = 0xAB;
+    ta.publish(sa, now - 10);
     m.on_tick(now);
     int seen = 0;
     for (const auto& e : c.rec.events) {

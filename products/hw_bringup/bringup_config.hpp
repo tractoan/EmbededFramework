@@ -41,5 +41,7 @@ inline hal::HdlcConfig imu_port_config(std::size_t /*imu*/) {
     return c;
 }
 inline constexpr bool kImuSoftwareFcs = false;      // true nếu bộ điều khiển trả cả 2 byte FCS
+// Mỗi lần đọc chờ tối đa thời gian này một khung hợp lệ; 3 lần liên tiếp không có -> kSensorFault.
+inline constexpr std::uint32_t kImuReadTimeoutMs = 100;
 
 }  // namespace product::hw

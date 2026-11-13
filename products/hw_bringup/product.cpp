@@ -17,7 +17,9 @@
 #include "gnss_bringup/gnss_bringup.hpp"
 #include "serial_bringup/serial_bringup.hpp"
 #include "device/digital_io.hpp"
-#include "services/hdlc_imu.hpp"
+#include "device/hdlc_imu.hpp"
+#include "messaging/topic.hpp"
+#include "services/sensor_scheduler.hpp"
 #include "messaging/buffer_allocators.hpp"
 #include "services/logger.hpp"
 #include "services/serial_port_bank.hpp"
@@ -44,7 +46,8 @@ constexpr osal::Priority kConsolePriority  = osal::Priority::Low;       // 4
 svc::SerialPortBank g_ports;
 device::GpioInputBank g_inputs;
 device::GpioOutputBank g_outputs;
-svc::HdlcImu g_imu[hw::kImuCount];
+device::HdlcImu g_imu[hw::kImuCount];                     // driver (không thread)
+msg::Topic<device::ImuSample> g_imu_topic[hw::kImuCount];   // mẫu mới nhất: nhóm lấy mẫu -> ImuBringup
 svc::GnssReceiver g_gnss;   // dịch vụ máy thu GNSS trên cổng hw::kGnssPort
 
 core::Status setup_serial(hal::IBoard& board) {
@@ -82,20 +85,33 @@ void setup_io(hal::IBoard& board) {
     }
 }
 
-void setup_imu(hal::IBoard& board) {
-    static const char* const kThread[] = {"imu0", "imu1", "imu2", "imu3"};
+// IMU: driver không thread (device::HdlcImu) + mỗi IMU một nhóm SensorScheduler chế độ Blocking (thread riêng,
+// priority cao, đọc khung liên tục) -> msg::Topic<ImuSample>. Nghiệp vụ (ImuBringup) chỉ đọc topic.
+// Sức khỏe từng IMU: "sys sensors"; lỗi liên tiếp -> svc::evt::kSensorFault / kSensorRecovered.
+core::Status setup_imu(app::ProductSetup& s) {
+    using ImuTask = svc::BlockingSensorTask<device::IImu, device::ImuSample, &device::IImu::read>;
+    static_assert(hw::kImuCount == 2, "add one ImuTask entry per IMU");
+    static ImuTask tasks[hw::kImuCount] = {
+        ImuTask{"imu0", g_imu[0], g_imu_topic[0], hw::kImuReadTimeoutMs},
+        ImuTask{"imu1", g_imu[1], g_imu_topic[1], hw::kImuReadTimeoutMs},
+    };
+    static svc::SensorScheduler groups[hw::kImuCount];
     for (std::size_t i = 0; i < hw::kImuCount; ++i) {
-        svc::HdlcImu::Config c;
+        device::HdlcImu::Config c;
         c.format       = hw::kImuFormat[i];
         c.port         = hw::imu_port_config(i);
         c.software_fcs = hw::kImuSoftwareFcs;
-        c.thread_name  = kThread[i % 4];
-        c.priority     = kImuPriority;
-        c.stack_bytes  = 3072;
-        if (!core::is_ok(g_imu[i].init(board.hdlc(i), c))) {
+        if (!core::is_ok(g_imu[i].init(s.board.hdlc(i), c))) {
             LOGW(kTag, "IMU%u: no SDLC/HDLC port %u on this board", static_cast<unsigned>(i), static_cast<unsigned>(i));
+        } else if (!core::is_ok(g_imu[i].open())) {
+            LOGW(kTag, "IMU%u: SDLC/HDLC port open failed: %s", static_cast<unsigned>(i), core::to_string(g_imu[i].status()));
         }
+        // Đọc chặn tối đa kImuReadTimeoutMs mỗi lần; cổng hỏng/không có: lỗi -> nhóm nghỉ hết timeout rồi thử lại.
+        core::Status st = groups[i].add(&tasks[i]);
+        if (core::is_ok(st)) st = s.sensors.add(&groups[i], osal::ThreadConfig{tasks[i].name(), kImuPriority, 3072, nullptr});
+        if (!core::is_ok(st)) return st;
     }
+    return core::Status::Ok;
 }
 
 // Bộ nhớ cho Event::buffer: chỉ pool tĩnh (O(1), không phân mảnh, không heap). Sức chứa tính theo
@@ -129,7 +145,7 @@ core::Status setup_modules(app::ModuleManager& modules) {
     static app::SerialBringup serial(app::SerialBringup::Config{&g_ports});
     static app::GnssBringup gnss(app::GnssBringup::Config{&g_gnss, &g_ports, hw::kGnssPort, hw::kGcsPort});
     static app::IoBringup io(&g_inputs, &g_outputs);
-    static device::IImu* const imus[hw::kImuCount] = {&g_imu[0], &g_imu[1]};
+    static const app::ImuBringup::Channel imus[hw::kImuCount] = {{&g_imu[0], &g_imu_topic[0]}, {&g_imu[1], &g_imu_topic[1]}};
     static app::ImuBringup imu(imus, hw::kImuCount);
 
     core::Status st = modules.add(&serial);
@@ -204,7 +220,8 @@ core::Status setup(app::ProductSetup& s) {
     setup_io(s.board);
     st = setup_gnss();
     if (!core::is_ok(st)) return st;
-    setup_imu(s.board);
+    st = setup_imu(s);
+    if (!core::is_ok(st)) return st;
     st = setup_modules(s.modules);
     return core::is_ok(st) ? setup_links(s) : st;
 }

@@ -6,8 +6,9 @@ add_library(ep_services STATIC
   src/param_cli.cpp
   src/command_service.cpp
   src/led_service.cpp
+  src/sensor_scheduler.cpp
+  src/actuator.cpp
   src/serial_port_bank.cpp   # nhiều cổng serial: loopback / stream (thread mỗi cổng)
-  src/hdlc_imu.cpp           # IMU SDLC/HDLC: thread đọc khung + device::ImuFormat
   src/gnss_receiver.cpp)     # máy thu GNSS: thread đọc/giải mã NMEA, gửi lệnh
 target_include_directories(ep_services PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(ep_services PUBLIC ep_messaging ep_device)

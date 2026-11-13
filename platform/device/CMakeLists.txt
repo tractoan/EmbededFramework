@@ -6,6 +6,7 @@ add_library(ep_device STATIC
   src/tmp102.cpp
   src/digital_io.cpp    # DI/DO trên các chân hal::IGpio
   src/imu_format.cpp    # giải mã khung IMU theo bảng (hàm thuần)
-  src/nmea.cpp)         # giải mã NMEA 0183 GGA/RMC của máy thu GNSS (hàm thuần)
+  src/nmea.cpp          # giải mã NMEA 0183 GGA/RMC của máy thu GNSS (hàm thuần)
+  src/hdlc_imu.cpp)     # IMU SDLC/HDLC: đọc khung chặn có timeout (không thread)
 target_include_directories(ep_device PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(ep_device PUBLIC ep_hal ep_osal)

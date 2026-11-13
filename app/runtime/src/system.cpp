@@ -35,7 +35,7 @@ core::Status System::init(const char* product_name, ProductSetupFn setup) {
     params_.init(board_.storage(), &bus_);
     param_cli_.init(&params_);
     commands_.register_command({"param", "list | get <n> | set <n> <v> | save | reset", &param_cli_});
-    commands_.register_command({"sys", "info | modules | tasks | buffers | log <0-5> | reboot | quit", &sys_cli_});
+    commands_.register_command({"sys", "info | modules | sensors | actuators | tasks | buffers | log <0-5> | reboot | quit", &sys_cli_});
     leds_.bind(svc::LedId::Status, board_.gpio(hal::GpioId::StatusLed));
     leds_.bind(svc::LedId::Alarm, board_.gpio(hal::GpioId::AlarmLed));
 
@@ -49,8 +49,9 @@ core::Status System::init(const char* product_name, ProductSetupFn setup) {
 
     // 5. Sản phẩm: module nghiệp vụ + kênh truyền thông
     if (setup == nullptr) return core::Status::InvalidArg;
-    ProductSetup product_setup{modules_, links_, board_, console_stream_, tasks_};
+    ProductSetup product_setup{modules_, links_, board_, console_stream_, tasks_, sensors_, actuators_};
     st = setup(product_setup);
+    actuators_.write_safe_all();   // sớm nhất có thể: mọi actuator ở trạng thái an toàn trước khi có gì chạy
     if (!core::is_ok(st)) {
         LOGE(kTag, "product setup failed: %s", core::to_string(st));
         return st;
@@ -72,12 +73,23 @@ core::Status System::init(const char* product_name, ProductSetupFn setup) {
     leds_.set(svc::LedId::Status, svc::LedPattern::Heartbeat);
     // Từ đây đã có thread đang chạy: lỗi khởi động phải dừng sạch chúng trước khi trả về,
     // nếu không, thread còn sống sẽ khiến việc hủy System bị treo.
-    st = modules_.start(tasks_.app);
+    // Cảm biến trước module: tick/event đầu tiên của module đã có dữ liệu trên topic.
+    // Actuator (thread riêng + giám sát) sau cảm biến, trước module: sẵn sàng nhận lệnh (vẫn chưa arm).
+    st = sensors_.start(&bus_);
     if (core::is_ok(st)) {
-        st = links_.start();
-        if (!core::is_ok(st)) task_start_failed("comm channels", st);
+        st = actuators_.start(&bus_, tasks_.actuator_supervisor);
+        if (!core::is_ok(st)) task_start_failed("actuator", st);
     } else {
-        task_start_failed("app", st);
+        task_start_failed("sensor", st);
+    }
+    if (core::is_ok(st)) {
+        st = modules_.start(tasks_.app);
+        if (core::is_ok(st)) {
+            st = links_.start();
+            if (!core::is_ok(st)) task_start_failed("comm channels", st);
+        } else {
+            task_start_failed("app", st);
+        }
     }
     if (!core::is_ok(st)) {
         shutdown();
@@ -108,6 +120,8 @@ void System::shutdown() {
     LOGI(kTag, "shutting down...");
     bus_.publish(msg::Event::make(app::sys::kSystemShutdown));
     links_.stop();
+    actuators_.stop();   // ĐẦU TIÊN sau kênh: mọi bộ chấp hành về an toàn trước khi dừng phần còn lại
+    sensors_.stop();
     modules_.stop();
     leds_.set(svc::LedId::Status, svc::LedPattern::Off);
     leds_.set(svc::LedId::Alarm, svc::LedPattern::Off);
@@ -137,6 +151,36 @@ int System::SysCli::on_command(int argc, char** argv, svc::CommandOutput& out) {
                           static_cast<unsigned long>(w->ticks()), static_cast<unsigned>(w->depth()));
             }
             out.print("\r\n");
+        }
+        return 0;
+    }
+    if (std::strcmp(sub, "sensors") == 0) {
+        if (sys_.sensors_.count() == 0) out.print("  (no sensor groups)\r\n");
+        for (std::size_t g = 0; g < sys_.sensors_.count(); ++g) {
+            const svc::SensorScheduler* grp = sys_.sensors_.at(g);
+            out.print("  group '%s' %s\r\n", sys_.sensors_.thread_name(g), grp->running() ? "running" : "stopped");
+            svc::SensorHealth h;
+            for (std::size_t i = 0; grp->health(i, h); ++i) {
+                const bool blk = h.mode == svc::SamplingMode::Blocking;
+                out.print("    %-10s %-8s %5lu ms ok=%lu err=%lu overrun=%lu max=%lu ms %s%s\r\n", h.name,
+                          blk ? "blocking" : "periodic", static_cast<unsigned long>(h.period_ms),
+                          static_cast<unsigned long>(h.samples_ok),
+                          static_cast<unsigned long>(h.errors), static_cast<unsigned long>(h.overruns),
+                          static_cast<unsigned long>(h.max_exec_ms), h.faulted ? "FAULT " : "",
+                          h.errors ? core::to_string(h.last_error) : "");
+            }
+        }
+        return 0;
+    }
+    if (std::strcmp(sub, "actuators") == 0) {
+        if (sys_.actuators_.count() == 0) out.print("  (no actuators)\r\n");
+        for (std::size_t i = 0; i < sys_.actuators_.count(); ++i) {
+            const svc::ActuatorStatus a = sys_.actuators_.at(i)->status();
+            out.print("  %-10s %-8s %-11s %s cmd=%lu rej=%lu upd=%lu overrun=%lu safe=%lu\r\n", a.name,
+                      a.threaded ? "threaded" : "direct", svc::to_string(a.reason), a.armed ? "armed  " : "disarmed",
+                      static_cast<unsigned long>(a.commands), static_cast<unsigned long>(a.rejected),
+                      static_cast<unsigned long>(a.updates), static_cast<unsigned long>(a.overruns),
+                      static_cast<unsigned long>(a.safe_events));
         }
         return 0;
     }

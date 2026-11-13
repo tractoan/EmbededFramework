@@ -3,7 +3,9 @@
 
 #include "mocks.hpp"
 #include "device/digital_io.hpp"
-#include "services/hdlc_imu.hpp"
+#include "device/hdlc_imu.hpp"
+#include "messaging/topic.hpp"
+#include "services/sensor_scheduler.hpp"
 #include "services/serial_port_bank.hpp"
 #include "test_framework.hpp"
 
@@ -124,7 +126,7 @@ TEST(serial_bank_cross_pair_pass) {
 }
 
 TEST(imu_decode_formats) {
-    device::ImuSample s;
+    device::ImuSample s{};
     auto f = ln200_frame();
     CHECK(device::decode_imu_frame(device::imu_formats::kLn200, f.data(), f.size(), s) == device::ImuDecodeResult::Ok);
     CHECK(near(s.accel[2], -400.0 / 16384.0 * 400.0, 1e-4));            // -9.7656 m/s²
@@ -149,14 +151,43 @@ TEST(imu_decode_formats) {
     CHECK(device::decode_imu_frame(device::imu_formats::kHg1700, h.data(), h.size(), s) == device::ImuDecodeResult::NotDataMessage);
 }
 
+namespace {
+// Cổng HDLC giả: trả lần lượt các khung đã nạp, hết thì trả 0 (như hết timeout).
+struct FakeHdlc final : hal::IHdlcPort {
+    std::deque<std::vector<std::uint8_t>> frames;
+    bool fail_open = false;
+    int opens = 0, reads = 0;
+    core::Status open(const hal::HdlcConfig&) override {
+        ++opens;
+        return fail_open ? core::Status::NotFound : core::Status::Ok;
+    }
+    void close() override {}
+    std::size_t read_frame(std::uint8_t* buf, std::size_t cap, std::uint32_t, hal::HdlcFrameStatus* st) override {
+        ++reads;
+        if (st != nullptr) *st = hal::HdlcFrameStatus{};
+        if (frames.empty()) return 0;
+        const auto f = frames.front();
+        frames.pop_front();
+        const std::size_t n = f.size() < cap ? f.size() : cap;
+        std::memcpy(buf, f.data(), n);
+        return n;
+    }
+    core::Status write_frame(const std::uint8_t*, std::size_t, std::uint32_t) override { return core::Status::Ok; }
+};
+std::uint64_t g_fake_ms = 0;
+std::uint64_t fake_clock() { return g_fake_ms; }
+}  // namespace
+
 TEST(hdlc_imu_driver_counters_and_software_fcs) {
-    svc::HdlcImu imu;
-    svc::HdlcImu::Config c;
+    device::HdlcImu imu;
+    device::HdlcImu::Config c;
     c.format       = &device::imu_formats::kLn200;
     c.software_fcs = true;
     CHECK(imu.init(nullptr, c) == core::Status::NotSupported);   // board không có cổng
     CHECK(std::string(imu.format_name()) == "ln200");
-    CHECK(imu.start() == core::Status::NotSupported);
+    CHECK(imu.open() == core::Status::NotSupported && imu.status() == core::Status::NotSupported);
+    device::ImuSample s{};
+    CHECK(imu.read(s, 10) == core::Status::NotSupported);
 
     auto f = ln200_frame();
     const std::uint16_t fcs = utils::crc16_x25(f.data(), f.size());
@@ -166,19 +197,61 @@ TEST(hdlc_imu_driver_counters_and_software_fcs) {
     bad.crc_error = true;
 
     std::uint64_t t = 1000;
-    for (int i = 0; i < 400; ++i) imu.process_frame(f.data(), f.size(), ok, t += 2);   // 500 Hz trong 0.8 s
-    imu.process_frame(f.data(), f.size(), bad, t);                                  // FCS lỗi do phần cứng báo
+    for (int i = 0; i < 400; ++i) CHECK(imu.process_frame(f.data(), f.size(), ok, t += 2, s));   // 500 Hz trong 0.8 s
+    CHECK(!imu.process_frame(f.data(), f.size(), bad, t, s));                          // FCS lỗi do phần cứng báo
     auto g = f;
-    g[0] ^= 0xFF;                                                                   // FCS phần mềm sai
-    imu.process_frame(g.data(), g.size(), ok, t);
-    imu.process_frame(f.data(), f.size() - 3, ok, t);                               // ngắn -> FCS sai
-    imu.process_frame(nullptr, 0, ok, t + 300);                                     // hết cửa sổ 1 s
+    g[0] ^= 0xFF;                                                                      // FCS phần mềm sai
+    CHECK(!imu.process_frame(g.data(), g.size(), ok, t, s));
+    CHECK(!imu.process_frame(f.data(), f.size() - 3, ok, t, s));                       // ngắn -> FCS sai
+    imu.process_frame(nullptr, 0, ok, t + 300, s);                                     // hết cửa sổ 1 s
     const device::ImuStats st = imu.stats();
     CHECK_EQ(st.frames, 400u);
     CHECK_EQ(st.crc_errors, 3u);
     CHECK(st.rate_hz >= 350 && st.rate_hz <= 450);
-    device::ImuSample s;
-    CHECK(imu.latest(s) && s.status == 0x00A5);
+    CHECK_EQ(s.status, 0x00A5);
+}
+
+TEST(hdlc_imu_blocking_read_with_sensor_scheduler) {
+    FakeHdlc port;
+    device::HdlcImu imu;
+    device::HdlcImu::Config c;
+    c.format = &device::imu_formats::kLn200;
+    CHECK(core::is_ok(imu.init(&port, c)) && core::is_ok(imu.open()));
+
+    // read(): bỏ qua khung không hợp lệ, trả mẫu hợp lệ đầu tiên; không có khung -> Timeout
+    auto bad = ln200_frame();
+    bad[0] ^= 1;   // sai checksum
+    port.frames = {bad, ln200_frame()};
+    device::ImuSample s{};
+    CHECK(imu.read(s, 50) == core::Status::Ok && s.status == 0x00A5);
+    CHECK(imu.read(s, 0) == core::Status::Timeout);
+    CHECK_EQ(imu.stats().format_errors, 1u);
+
+    // Nhóm SensorScheduler chế độ Blocking (đồng hồ giả, gọi run_due() trực tiếp – không thread)
+    msg::Topic<device::ImuSample> topic;
+    svc::BlockingSensorTask<device::IImu, device::ImuSample, &device::IImu::read> task("imu0", imu, topic, 100);
+    svc::SensorScheduler::Config sc;
+    sc.clock = &fake_clock;
+    svc::SensorScheduler group(sc);
+    msg::EventBus bus;
+    mock::Recorder rec;
+    bus.subscribe(msg::evt::kAny, &rec);
+    group.set_event_bus(&bus);
+    CHECK(core::is_ok(group.add(&task)) && group.blocking());
+
+    port.frames = {ln200_frame()};
+    g_fake_ms   = 5000;
+    group.run_due();
+    device::ImuSample got{};
+    msg::TopicStamp stamp;
+    CHECK(core::is_ok(topic.read(got, &stamp)) && stamp.sequence == 1 && got.status == 0x00A5);
+    for (int k = 0; k < 3; ++k) group.run_due();   // 3 lần không có khung -> kSensorFault
+    CHECK_EQ(rec.count(svc::evt::kSensorFault), 1u);
+    port.frames = {ln200_frame()};
+    group.run_due();
+    CHECK_EQ(rec.count(svc::evt::kSensorRecovered), 1u);
+    svc::SensorHealth h;
+    CHECK(group.health(0, h) && h.samples_ok == 2 && h.errors == 3 && !h.faulted);
 }
 
 TEST(digital_io_banks) {

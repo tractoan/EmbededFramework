@@ -2,6 +2,8 @@
 #include "app/module_manager.hpp"
 #include "comm/link_manager.hpp"
 #include "hal/board.hpp"
+#include "services/actuator.hpp"
+#include "services/sensor_scheduler.hpp"
 
 namespace app {
 
@@ -12,6 +14,8 @@ namespace app {
 struct TaskPlan {
     osal::ThreadConfig app{"app", osal::Priority::Normal, 4096, nullptr};    // ModuleManager (nghiệp vụ)
     osal::ThreadConfig leds{"led", osal::Priority::Low, 1024, nullptr};      // LedService
+    // Giám sát actuator (chỉ tạo khi sản phẩm có actuator): priority CAO HƠN mọi thread actuator.
+    osal::ThreadConfig actuator_supervisor{"act_sup", osal::Priority::Realtime, 1024, nullptr};
 };
 
 // Những gì một sản phẩm được phép "lắp ráp" khi khởi động.
@@ -21,6 +25,8 @@ struct ProductSetup {
     hal::IBoard& board;          // để lấy thêm cổng (vd. UartId::Aux)
     comm::IByteStream& console;  // cổng console đã sẵn sàng
     TaskPlan& tasks;             // priority/stack của task framework
+    svc::SensorHub& sensors;     // nhóm lấy mẫu cảm biến (SensorScheduler) – System khởi động/dừng
+    svc::ActuatorHub& actuators; // bộ chấp hành (Actuator<Cmd>) – an toàn lúc khởi động/tắt, giám sát
 };
 
 }  // namespace app

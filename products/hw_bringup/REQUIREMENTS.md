@@ -159,6 +159,7 @@
 | 2026-11-09 | | Cập nhật theo main (ModuleWorker): ghi lệnh GNSS chuyển sang worker `gnss_tx` riêng của `SerialBringup`. Không đổi yêu cầu. |
 | 2026-11-09 | | GNS-08: giải mã NMEA (GGA/RMC) gửi giờ UTC, lat, lon lên PC qua `GNSS_FIX` + `GPS_RAW_INT`. |
 | 2026-11-09 | | Tách GNSS: `svc::GnssReceiver` (service: đọc/giải mã NMEA, gửi lệnh) + `app::GnssBringup` (business: luật 5 s, báo cáo); `SerialBringup` chỉ còn loopback. Không đổi yêu cầu. |
+| 2026-11-13 | | Cập nhật theo main (SensorScheduler, Topic, Actuator): IMU đọc qua `SensorScheduler` + `msg::Topic`, driver `device::HdlcImu` không thread. DO chưa chuyển sang `Actuator` (cần quyết định arm/deadman). Không đổi yêu cầu. |
 | | | |
 
 ---

@@ -4,20 +4,24 @@
 // không phải viết driver mới.
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
 #include "core/status.hpp"
 
 namespace device {
 
+// Kiểu "trivial" (không giá trị mặc định cho thành viên) để đi qua msg::Topic bằng memcpy:
+// khởi tạo bằng `ImuSample s{}` (mọi trường = 0).
 struct ImuSample {
-    std::uint32_t time_ms   = 0;     // thời điểm nhận khung (osal::now_ms)
-    float gyro[3]           = {};    // rad/s
-    float accel[3]          = {};    // m/s²
-    float temperature       = 0;     // °C (NaN nếu định dạng không có)
-    std::uint16_t status    = 0;     // status word thô của IMU
-    std::uint8_t raw_len    = 0;     // số byte thô hợp lệ trong raw
-    std::uint8_t raw[48]    = {};    // đầu khung thô (để đối chiếu ICD khi bring-up)
+    std::uint32_t time_ms;     // thời điểm nhận khung (osal::now_ms)
+    float gyro[3];             // rad/s
+    float accel[3];            // m/s²
+    float temperature;         // °C (NaN nếu định dạng không có)
+    std::uint16_t status;      // status word thô của IMU
+    std::uint8_t raw_len;      // số byte thô hợp lệ trong raw
+    std::uint8_t raw[48];      // đầu khung thô (để đối chiếu ICD khi bring-up)
 };
+static_assert(std::is_trivial<ImuSample>::value, "ImuSample must stay trivial (msg::Topic copies it with memcpy)");
 
 struct ImuStats {
     std::uint32_t frames        = 0;   // khung hợp lệ
@@ -28,16 +32,17 @@ struct ImuStats {
     std::uint64_t last_frame_ms = 0;   // 0 = chưa nhận khung nào
 };
 
-// Hiện thực có thể chạy thread riêng (vd. svc::HdlcImu) – device chỉ định nghĩa interface + bộ giải mã.
+// Driver IMU KHÔNG có thread: bên lấy mẫu (svc::SensorScheduler + BlockingSensorTask) gọi read() liên tục,
+// mẫu đi ra msg::Topic<ImuSample>; nghiệp vụ đọc topic + stats().
 class IImu {
 public:
     virtual ~IImu() = default;
     virtual const char* format_name() const = 0;
     virtual std::uint8_t type_id() const    = 0;
-    virtual core::Status start()            = 0;
-    virtual void stop()                     = 0;
-    virtual bool latest(ImuSample& out) const = 0;   // false nếu chưa có mẫu
-    virtual ImuStats stats() const          = 0;
+    virtual core::Status status() const     = 0;   // Ok: cổng đã mở; ngược lại: lỗi mở cổng / không có cổng
+    // Chờ tối đa timeout_ms một khung HỢP LỆ rồi giải mã vào out. Ok / Timeout / lỗi cổng.
+    virtual core::Status read(ImuSample& out, std::uint32_t timeout_ms) = 0;
+    virtual ImuStats stats() const = 0;   // thread-safe
 };
 
 // ----------------------------------------------------------------- định dạng

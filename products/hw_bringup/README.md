@@ -22,8 +22,10 @@ Firmware chạy trên **CPU nhúng (Linux)** để kiểm tra bo mạch, báo k�
    dialects/bringup    định nghĩa bản tin 62000..62005 trên dây (struct, offset, CRC_EXTRA) – không phụ thuộc nghiệp vụ
  communication/net     UdpStream: kênh MAVLink thứ hai qua mạng (khi target có TCP/IP)
  services              SerialPortBank (thread/cổng: Loopback|Stream|External) · GnssReceiver (thread: NMEA, fix, gửi lệnh)
-                       · HdlcImu (thread đọc khung)   (CƠ CHẾ, không biết khái niệm bring-up)
- platform/device       GpioInput/OutputBank (DI/DO) · ImuFormat + decode_imu_frame (giải mã theo bảng) · NmeaParser (GGA/RMC)
+                       · SensorScheduler của framework: mỗi IMU một nhóm Blocking (thread imu0/imu1) -> msg::Topic
+                       (CƠ CHẾ, không biết khái niệm bring-up)
+ platform/device       GpioInput/OutputBank (DI/DO) · HdlcImu (đọc khung chặn, không thread) · ImuFormat + decode_imu_frame
+                       (giải mã theo bảng) · NmeaParser (GGA/RMC)
  platform/hal          IBoard::serial(i) / digital_input(i) / digital_output(i) / hdlc(i) · IHdlcPort
    ports/linux_cpu     termios(+RS485) · GPIO chardev v2 · SyncLink/N_HDLC/chardev/AF_PACKET · file NV
    ports/linux_sim     12 serial (UDP/loopback/GNSS giả lập) · DI nối vòng DO · 2 IMU giả lập
@@ -127,6 +129,21 @@ Các câu khác bị bỏ qua; dữ liệu nhị phân (UBX…) xen giữa khôn
 - Xem trên console: `gnss` (số fix, lỗi checksum, giờ UTC, lat/lon); trên PC: `tools/mavlink/bringup_gcs.py gnss-fix`.
 
 ## IMU
+
+Luồng dữ liệu (theo cơ chế lấy mẫu cảm biến của framework):
+
+```
+ hal::IHdlcPort ──► device::HdlcImu::read(sample, 100 ms)        driver không thread: chờ 1 khung hợp lệ, giải mã
+                     ▲ gọi liên tục
+ svc::SensorScheduler (nhóm Blocking, thread imu0/imu1, prio 12)  sức khỏe; 3 lần không có khung -> kSensorFault
+                     │ publish
+ msg::Topic<device::ImuSample> (giá trị mới nhất, không hàng đợi)
+                     │ đọc imu.rate_hz lần/s
+ app::ImuBringup ──► kImuSample ──► IMU_DATA                       chính sách: tần số gửi, imu.timeout_ms, thông báo
+```
+
+Xem trên console: `sys sensors` (mẫu tốt/lỗi, FAULT, thời gian đọc dài nhất), `imu` (tần số, khung, lỗi, khung thô).
+Cổng HDLC được mở lúc `product::setup()`; không mở được -> IMU báo `port failed`, nhóm vẫn chạy và báo FAULT.
 
 `device::ImuFormat` mô tả khung bằng bảng (offset trường, độ rộng, endian, LSB, checksum, byte nhận dạng).
 Hai định dạng tham khảo trong `platform/device/src/imu_format.cpp`:

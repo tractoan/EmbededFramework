@@ -32,13 +32,13 @@ Mục tiêu:
 ├────────────────────────────────────────────────────────────────────────┤
 │ SERVICES (services/)  dịch vụ hệ thống: có trạng thái, có chính sách   │
 │  ParamStore(NV+CRC) · CommandService(bảng lệnh) · Logger · LedService  │
-│  SerialPortBank · GnssReceiver (NMEA) · HdlcImu (khung SDLC/HDLC)      │
+│  SerialPortBank (loopback/stream) · GnssReceiver (NMEA, gửi lệnh)      │
 ├────────────────────────────────────────────────────────────────────────┤
 │ MESSAGING (messaging/)  lõi giao tiếp, không phụ thuộc nền tảng        │
 │  Event · EventBus · Buffer + pool tĩnh (BlockPool/Pool/ChainAllocator) │
 ╞═════════════════════════ PLATFORM (platform/) ═════════════════════════╡
 │ DEVICE (device/)  thiết bị NGOÀI chip: Tmp102 : ITemperatureSensor     │
-│  GpioInput/OutputBank : IDigitalInputs/Outputs · ImuFormat (giải mã)   │
+│  GpioInput/OutputBank · HdlcImu : IImu (đọc khung chặn) · ImuFormat    │
 │ NET (net/)  TCP/IP IPv4: TcpListener · TcpConnection · UdpSocket       │
 │             ports: posix (BSD socket) │ lwip (MCU)   – EP_NET_PORT     │
 ├──────────────────────────────────┬─────────────────────────────────────┤
@@ -134,7 +134,7 @@ EmbededFramework/
 │   │       └── qnx/            # mọi board có BSP QNX: cấu hình thiết bị bằng biến môi trường
 │   ├── net/                    # TCP/IP: include/net/net.hpp, ports/{posix,lwip}
 │   ├── device/
-│   │   └── include/device/     # temperature_sensor, tmp102, digital_io, imu (+ImuFormat), nmea
+│   │   └── include/device/     # temperature_sensor, tmp102, digital_io, imu (+ImuFormat), hdlc_imu, nmea
 │   └── target/                 # khởi động theo nền tảng đích: target::init / run / stop_requested
 │       ├── include/target/target.hpp
 │       ├── linux_sim/          # tham số dòng lệnh, Ctrl+C, --run-for
@@ -147,10 +147,12 @@ EmbededFramework/
 │       ├── qnx/                # như linux_sim + mlockall, kiểm tra quyền priority, bỏ qua SIGPIPE
 │       └── common/{stm32f4,freertos}/   # clock_config.c; hook cấp phát tĩnh FreeRTOS dùng chung
 ├── messaging/
-│   └── include/messaging/      # event, event_bus, buffer, buffer_allocators     (ep_messaging)
+│   └── include/messaging/      # event, event_bus, buffer, buffer_allocators, topic (ep_messaging)
 ├── services/
 │   └── include/services/       # param_store, param_cli, command_service, logger, led_service,
-│                               # serial_port_bank, gnss_receiver, hdlc_imu
+│                               # sensor_scheduler (ISensorTask, SensorTask<>, SensorScheduler, SensorHub),
+│                               # actuator (Actuator<Cmd>, ActuatorHub), periodic_schedule
+│                               # serial_port_bank, gnss_receiver
 ├── communication/
 │   ├── link/                   # byte_stream, protocol, link_manager      (ep_comm)
 │   ├── net/                    # tcp_server/tcp_client/udp stream         (ep_comm_net, khi có mạng)
@@ -246,6 +248,97 @@ void on_event(const msg::Event& e) {                                      // m�
   Ví dụ: `thermo_pro` = pool 64 B×16 / 512 B×8 / 2 KB×4 (lô tối đa 1000 mẫu); `thermo_lite` = một pool 128 B×4 (52 mẫu).
   Allocator thread-safe (vùng găng ngắn); **chưa** hỗ trợ cấp phát trong ISR.
 
+### Dữ liệu tần số cao: `msg::Topic<T>`
+
+EventBus dành cho **sự kiện rời rạc** (đổi trạng thái, lỗi, lệnh). Dòng dữ liệu đều đặn tần số cao (mẫu cảm
+biến, trạng thái ước lượng, setpoint) đi qua `msg::Topic<T>` – kênh **giá trị mới nhất**, không hàng đợi:
+
+```cpp
+static msg::Topic<ImuSample> imu;                  // product sở hữu, truyền tham chiếu cho hai phía
+imu.publish(sample, osal::now_ms());               // MỘT bên ghi
+ImuSample s; msg::TopicStamp st;
+if (core::is_ok(imu.read(s, &st)) && st.sequence != last_seq) { last_seq = st.sequence; /* mẫu mới */ }
+```
+
+Seqlock trên các word `std::atomic`: nhiều bên đọc, không khóa, không cấp phát, không bản chụp rách.
+`read()` trả `NotFound` (chưa có dữ liệu) hoặc `Busy` khi bên ghi đang ghi dở – **không quay chờ vô hạn**
+(trên RTOS đơn lõi, bên đọc priority cao ngắt bên ghi giữa chừng sẽ treo nếu quay mãi); bên đọc dùng giá
+trị trước và đọc lại chu kỳ sau.
+
+### Lấy mẫu cảm biến: `SensorScheduler` (plug-in, đóng với sửa đổi)
+
+```cpp
+static msg::Topic<std::int32_t> temp_topic;
+static svc::SensorTask<device::ITemperatureSensor, std::int32_t,
+                       &device::ITemperatureSensor::read_deci_celsius> temp{"tmp102", tmp102, temp_topic, 500};
+static svc::SensorScheduler env;                    // một thread cho cả nhóm
+env.add(&temp);                                     // thêm cảm biến = thêm task, không sửa scheduler
+s.sensors.add(&env, {"snsr_env", osal::Priority::High, 2048, nullptr});   // trong product::setup()
+```
+
+| Thành phần | Trách nhiệm |
+|---|---|
+| `ISensorTask` | Một nguồn dữ liệu: `mode()` (định kỳ / chặn), `sample(clock)` đọc device, đẩy ra topic |
+| `SensorTask<Device, Sample, &Device::read>` | **Định kỳ** (polling): `read(Sample&)` – một dòng khai báo cho mỗi cảm biến |
+| `BlockingSensorTask<Device, Sample, &Device::read>` | **Chặn**: `read(Sample&, timeout_ms)` tự chờ dữ liệu, vd. semaphore do ISR DRDY `give_from_isr()` |
+| `StreamSensorTask<Parser, Sample>` | **Chặn, dòng byte**: đọc `hal::IUart`, đưa từng byte vào parser (`bool feed(byte, Sample&)`) – GNSS (NMEA/UBX), máy thu RC (SBUS/CRSF); mẫu cắt ngang giữa hai lần đọc vẫn ghép đúng, nhiều mẫu một lần đọc thì publish từng mẫu |
+| `SensorScheduler` | Một thread chạy một **nhóm** task: lịch **không trôi** (lỡ ≥ 1 chu kỳ → đếm overrun, đặt lại lịch, không chạy dồn), sức khỏe từng task (ok / lỗi / lỗi liên tiếp / overrun / thời gian đọc dài nhất); N lỗi liên tiếp → `svc::evt::kSensorFault`, đọc tốt lại → `kSensorRecovered` (EventBus) |
+| `SensorHub` | `System` giữ; khởi động các nhóm trước module, dừng sau kênh; `sys sensors` in sức khỏe |
+
+| Cơ chế | Lập lịch | Khi nào dùng |
+|---|---|---|
+| **Định kỳ** (polling) | Scheduler gọi `sample()` mỗi chu kỳ, lịch **không trôi**; nhiều task dùng chung một thread | Cảm biến đọc theo yêu cầu (I2C/SPI): nhiệt độ, áp suất, từ trường |
+| **Chặn** (blocking read) | `sample()` tự chờ dữ liệu tối đa timeout (`period_ms()`); task chặn **chiếm trọn một nhóm** (`add()` từ chối trộn); có dữ liệu là đọc ngay, timestamp lấy **lúc dữ liệu đến** | Cảm biến tự báo có dữ liệu (DRDY), dòng byte UART, thiết bị tự phát |
+
+Với task chặn: hết timeout không có dữ liệu = lỗi `Timeout` → N lần liên tiếp → `kSensorFault` (dữ liệu cũ).
+Lỗi trả về **ngay** thay vì chờ (UART đóng, bus lỗi) → scheduler nghỉ phần còn lại của timeout, không quay
+chiếm CPU. Dừng nhóm chặn mất tối đa một timeout.
+
+Nhóm định kỳ theo **bus và nhịp**, không theo loại cảm biến: task trong một nhóm chạy tuần tự – cảm biến I2C
+chậm đặt chung nhóm với IMU 1 kHz sẽ làm trễ IMU. Lịch định kỳ theo đồng hồ OSAL (1 ms); nhanh hơn 1 kHz hoặc
+jitter dưới 1 ms: dùng task **chặn** chờ ngắt DRDY.
+
+### Bộ chấp hành: `svc::Actuator<Cmd>` (tự chủ, có thể có thread riêng)
+
+Mỗi actuator (servo, ESC, relay, stepper, heater…) **tự xử lý phần cứng của nó**; bên ngoài (nghiệp vụ,
+giao thức, failsafe) chỉ gọi `command()`. Vòng điều khiển nội bộ (PID vị trí của servo, làm mới khung ESC,
+ramp của stepper) là việc riêng của actuator – chạy trên thread riêng của nó.
+
+```cpp
+struct ServoCmd { float deg; };
+class Servo final : public svc::Actuator<ServoCmd> {
+public:
+    Servo(...) : Actuator("servo", {/*update_period_ms*/ 2, /*command_timeout_ms*/ 200}) {}
+private:
+    void on_update(const ServoCmd& sp, std::uint64_t now) override {   // thread riêng, mỗi 2 ms
+        pwm_.set_duty(pid_.update(sp.deg - feedback_deg(), 0.002f));   // PID nội bộ của servo
+    }
+    void write_safe() override { pwm_.set_duty(0); }                   // trạng thái an toàn
+};
+// product::setup():  s.actuators.add(&servo, {"servo", osal::Priority::High, 2048, nullptr});
+// bên ngoài:         servo.arm();  servo.command({30.0f});
+```
+
+| Chế độ (`update_period_ms`) | Hành vi | Ví dụ |
+|---|---|---|
+| `0` – **trực tiếp** | `command()` ghi phần cứng ngay trên thread người gọi (`on_command`) | relay, servo RC, còi |
+| `> 0` – **thread riêng** | `command()` chỉ lưu setpoint mới nhất (không chặn); thread của actuator gọi `on_update(setpoint)` theo lịch không trôi | servo tự làm (PID), ESC, stepper |
+
+An toàn – chung cho mọi actuator, lớp con chỉ viết `write_safe()`:
+
+| Cơ chế | Hành vi |
+|---|---|
+| Khởi động / tắt máy | `write_safe()` ngay sau `product::setup()`; khi dừng, actuator về an toàn **trước** mọi thứ khác |
+| Arm | Chỉ xuất khi đã `arm()`; chưa arm / `disarm()` → an toàn, lệnh bị từ chối (`Busy`) |
+| Deadman | Không có lệnh mới quá `command_timeout_ms` → an toàn; lệnh mới → tự xuất lại |
+| Thread kẹt | Thread giám sát độc lập (`TaskPlan::actuator_supervisor`, priority cao hơn actuator) thấy thread riêng không chạy quá `stall_timeout_ms` (mặc định 4 × chu kỳ, ≥ 20 ms) → an toàn + **chốt** (phải `arm()` lại) |
+| Không ghi sau khi đã ép an toàn | Kiểm tra quyền xuất và ghi phần cứng nằm trong cùng vùng khóa của actuator: sau khi `force_safe()` trả về, không còn lần ghi giá trị nào khác |
+| Sự kiện | `svc::evt::kActuatorSafe` (lý do) / `kActuatorResumed` lên EventBus; `sys actuators` in trạng thái |
+
+Giới hạn: nếu thread riêng kẹt **ngay trong lúc ghi phần cứng** (đang giữ khóa), lần ghi đó không thể bị ngắt –
+actuator bị chốt và trở về an toàn ở chu kỳ kế tiếp khi thread chạy lại. Phần cứng cần ngắt tức thời (cắt
+motor khi treo) nên có thêm watchdog/enable phần cứng độc lập với phần mềm.
+
 ### Trình tự khởi động (`app::System::init`)
 
 1. `board.init()` → gắn console vào Logger
@@ -254,7 +347,10 @@ void on_event(const msg::Event& e) {                                      // m�
 4. Bring-up thiết bị: driver gắn lên bus HAL (`Tmp102` ← `II2c`) → `Devices`
 5. `product::setup()` → thêm module + khai báo kênh/giao thức; rồi `on_init()` từng module (đăng ký tham số, lệnh)
 6. `params.load()` từ NV, gồm cả lựa chọn giao thức `comm.<kênh>` (CRC sai/không có → giữ mặc định)
-7. Start service → `on_start()` từng module → `links.start()` (mỗi kênh bật giao thức đã chọn) → publish `kSystemStarted`
+7. Start service → các nhóm cảm biến (`SensorHub`) → actuator (`ActuatorHub`: thread riêng + giám sát, vẫn
+   chưa arm) → `on_start()` từng module → `links.start()` (mỗi kênh bật giao thức đã chọn) → publish
+   `kSystemStarted`. Actuator được ghi trạng thái an toàn ngay sau `product::setup()`.
+   Khi dừng: kênh → **actuator về an toàn** → cảm biến → module.
 8. `osal::end_startup()`: **niêm phong bộ nhớ** – từ đây cấm heap và cấm lấy thêm stack (xem dưới)
 
 Nếu bước 7 thất bại (vd. vùng stack không đủ), các thread đã khởi động được dừng sạch và lỗi chỉ rõ task nào,
