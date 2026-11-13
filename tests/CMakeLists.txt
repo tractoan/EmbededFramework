@@ -11,6 +11,7 @@ add_executable(ep_tests
   test_module_worker.cpp
   test_sensor_scheduler.cpp
   test_sensor_blocking.cpp
+  test_actuator.cpp
   test_alarm_controller.cpp
   test_cli_protocol.cpp
   test_modbus.cpp

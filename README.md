@@ -142,7 +142,8 @@ EmbededFramework/
 │   └── include/messaging/      # event, event_bus, buffer, buffer_allocators, topic (ep_messaging)
 ├── services/
 │   └── include/services/       # param_store, param_cli, command_service, logger, led_service,
-│                               # sensor_scheduler (ISensorTask, SensorTask<>, SensorScheduler, SensorHub)
+│                               # sensor_scheduler (ISensorTask, SensorTask<>, SensorScheduler, SensorHub),
+│                               # actuator (Actuator<Cmd>, ActuatorHub), periodic_schedule
 ├── communication/
 │   ├── link/                   # byte_stream, protocol, link_manager      (ep_comm)
 │   ├── net/                    # tcp_server/tcp_client/udp stream         (ep_comm_net, khi có mạng)
@@ -284,6 +285,47 @@ Nhóm định kỳ theo **bus và nhịp**, không theo loại cảm biến: tas
 chậm đặt chung nhóm với IMU 1 kHz sẽ làm trễ IMU. Lịch định kỳ theo đồng hồ OSAL (1 ms); nhanh hơn 1 kHz hoặc
 jitter dưới 1 ms: dùng task **chặn** chờ ngắt DRDY.
 
+### Bộ chấp hành: `svc::Actuator<Cmd>` (tự chủ, có thể có thread riêng)
+
+Mỗi actuator (servo, ESC, relay, stepper, heater…) **tự xử lý phần cứng của nó**; bên ngoài (nghiệp vụ,
+giao thức, failsafe) chỉ gọi `command()`. Vòng điều khiển nội bộ (PID vị trí của servo, làm mới khung ESC,
+ramp của stepper) là việc riêng của actuator – chạy trên thread riêng của nó.
+
+```cpp
+struct ServoCmd { float deg; };
+class Servo final : public svc::Actuator<ServoCmd> {
+public:
+    Servo(...) : Actuator("servo", {/*update_period_ms*/ 2, /*command_timeout_ms*/ 200}) {}
+private:
+    void on_update(const ServoCmd& sp, std::uint64_t now) override {   // thread riêng, mỗi 2 ms
+        pwm_.set_duty(pid_.update(sp.deg - feedback_deg(), 0.002f));   // PID nội bộ của servo
+    }
+    void write_safe() override { pwm_.set_duty(0); }                   // trạng thái an toàn
+};
+// product::setup():  s.actuators.add(&servo, {"servo", osal::Priority::High, 2048, nullptr});
+// bên ngoài:         servo.arm();  servo.command({30.0f});
+```
+
+| Chế độ (`update_period_ms`) | Hành vi | Ví dụ |
+|---|---|---|
+| `0` – **trực tiếp** | `command()` ghi phần cứng ngay trên thread người gọi (`on_command`) | relay, servo RC, còi |
+| `> 0` – **thread riêng** | `command()` chỉ lưu setpoint mới nhất (không chặn); thread của actuator gọi `on_update(setpoint)` theo lịch không trôi | servo tự làm (PID), ESC, stepper |
+
+An toàn – chung cho mọi actuator, lớp con chỉ viết `write_safe()`:
+
+| Cơ chế | Hành vi |
+|---|---|
+| Khởi động / tắt máy | `write_safe()` ngay sau `product::setup()`; khi dừng, actuator về an toàn **trước** mọi thứ khác |
+| Arm | Chỉ xuất khi đã `arm()`; chưa arm / `disarm()` → an toàn, lệnh bị từ chối (`Busy`) |
+| Deadman | Không có lệnh mới quá `command_timeout_ms` → an toàn; lệnh mới → tự xuất lại |
+| Thread kẹt | Thread giám sát độc lập (`TaskPlan::actuator_supervisor`, priority cao hơn actuator) thấy thread riêng không chạy quá `stall_timeout_ms` (mặc định 4 × chu kỳ, ≥ 20 ms) → an toàn + **chốt** (phải `arm()` lại) |
+| Không ghi sau khi đã ép an toàn | Kiểm tra quyền xuất và ghi phần cứng nằm trong cùng vùng khóa của actuator: sau khi `force_safe()` trả về, không còn lần ghi giá trị nào khác |
+| Sự kiện | `svc::evt::kActuatorSafe` (lý do) / `kActuatorResumed` lên EventBus; `sys actuators` in trạng thái |
+
+Giới hạn: nếu thread riêng kẹt **ngay trong lúc ghi phần cứng** (đang giữ khóa), lần ghi đó không thể bị ngắt –
+actuator bị chốt và trở về an toàn ở chu kỳ kế tiếp khi thread chạy lại. Phần cứng cần ngắt tức thời (cắt
+motor khi treo) nên có thêm watchdog/enable phần cứng độc lập với phần mềm.
+
 ### Trình tự khởi động (`app::System::init`)
 
 1. `board.init()` → gắn console vào Logger
@@ -292,8 +334,10 @@ jitter dưới 1 ms: dùng task **chặn** chờ ngắt DRDY.
 4. Bring-up thiết bị: driver gắn lên bus HAL (`Tmp102` ← `II2c`) → `Devices`
 5. `product::setup()` → thêm module + khai báo kênh/giao thức; rồi `on_init()` từng module (đăng ký tham số, lệnh)
 6. `params.load()` từ NV, gồm cả lựa chọn giao thức `comm.<kênh>` (CRC sai/không có → giữ mặc định)
-7. Start service → các nhóm cảm biến (`SensorHub`) → `on_start()` từng module → `links.start()` (mỗi kênh bật
-   giao thức đã chọn) → publish `kSystemStarted`. Khi dừng: kênh → cảm biến → module.
+7. Start service → các nhóm cảm biến (`SensorHub`) → actuator (`ActuatorHub`: thread riêng + giám sát, vẫn
+   chưa arm) → `on_start()` từng module → `links.start()` (mỗi kênh bật giao thức đã chọn) → publish
+   `kSystemStarted`. Actuator được ghi trạng thái an toàn ngay sau `product::setup()`.
+   Khi dừng: kênh → **actuator về an toàn** → cảm biến → module.
 8. `osal::end_startup()`: **niêm phong bộ nhớ** – từ đây cấm heap và cấm lấy thêm stack (xem dưới)
 
 Nếu bước 7 thất bại (vd. vùng stack không đủ), các thread đã khởi động được dừng sạch và lỗi chỉ rõ task nào,
