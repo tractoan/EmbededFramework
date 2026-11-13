@@ -27,13 +27,16 @@ if(TARGET ep_comm_net)
   target_link_libraries(ep_tests PRIVATE ep_comm_net)
 endif()
 
-# GPIO thanh ghi (header-only, không phụ thuộc OS) – test trên mọi host
-target_sources(ep_tests PRIVATE test_mmio_gpio.cpp)
-target_include_directories(ep_tests PRIVATE ${PROJECT_SOURCE_DIR}/platform/hal/ports/common)
+# Logic HAL header-only, không phụ thuộc OS (GPIO thanh ghi, PIO Nios II, flash NOR) – test trên mọi host
+target_sources(ep_tests PRIVATE test_mmio_gpio.cpp test_nios2_pio.cpp test_flash_region_storage.cpp)
+target_include_directories(ep_tests PRIVATE ${PROJECT_SOURCE_DIR}/platform/hal/ports/common
+                                            ${PROJECT_SOURCE_DIR}/platform/hal/ports)
 
 # HAL dùng chung theo OS (EP_HAL_COMMON của target): posix (UART termios, FileStorage), linux, qnx
 if("posix" IN_LIST EP_HAL_COMMON)
-  target_sources(ep_tests PRIVATE test_posix_hal.cpp)
+  # FdUart (dùng bởi Nios II) chỉ cần open/read/write: kiểm tra bằng pty trên host POSIX
+  target_sources(ep_tests PRIVATE test_posix_hal.cpp test_fd_uart.cpp
+                 ${PROJECT_SOURCE_DIR}/platform/hal/ports/common/fdio/fd_uart.cpp)
 endif()
 if("linux" IN_LIST EP_HAL_COMMON)
   target_sources(ep_tests PRIVATE test_linux_hal.cpp)

@@ -5,9 +5,9 @@
 
 | | |
 |---|---|
-| Phiên bản tài liệu | 1.0 |
-| Ứng với code | `main` @ `b4e6d3d` (sau PR #7) |
-| Số test tự động | 81 test case (`tests/`) – 79 chạy trên host; +2 riêng QNX |
+| Phiên bản tài liệu | 1.1 |
+| Ứng với code | `main` @ `0eecddd` (sau PR #8) + hỗ trợ Nios II |
+| Số test tự động | 89 test case (`tests/`) – 87 chạy trên host Linux; target QNX chạy 88 (thêm 2 test riêng QNX, không có test riêng Linux) |
 
 ---
 
@@ -113,6 +113,7 @@ thành `DROP` và ghi lý do. Yêu cầu tách đôi thì giữ mã cũ cho ph�
 | SRC-14 | Cảm biến hỗ trợ nhiều cơ chế lấy mẫu: polling định kỳ và read blocking |
 | SRC-15 | Output/actuator có thể có thread riêng để tự xử lý (vd. servo với PID nội bộ); **không** đẩy PID lên business; target hướng tới platform cho drone |
 | SRC-16 | Tài liệu yêu cầu chi tiết để cập nhật và truy vết (tài liệu này) |
+| SRC-17 | Bổ sung hỗ trợ Nios II |
 
 | Mã | Quyết định thiết kế rút ra từ thảo luận |
 |---|---|
@@ -180,6 +181,7 @@ Macro cấu hình hiện có (mặc định): `EP_CFG_MAX_EVENT_SUBSCRIBERS` 16 
 | OSAL-004 | Thread khởi động lại được, dùng lại tài nguyên | SRC-07 | `osal::Thread` | `osal_thread_restart_reuses_resources` | `VER` |
 | OSAL-005 | Hook FreeRTOS cấp phát tĩnh dùng chung (idle/timer task memory, stack overflow, malloc failed) | SRC-10 | `platform/target/common/freertos/freertos_static_hooks.inc` | Biên dịch STM32 (tham khảo), R5 | `CMP` |
 | OSAL-006 | Đồng hồ hệ thống độ phân giải ms (không có µs) | – | `osal/time.hpp` | – | `VER` |
+| OSAL-007 | Vùng găng port uC/OS-II dùng macro chuẩn `OS_ENTER_CRITICAL/OS_EXIT_CRITICAL` (biến `cpu_sr`) – không gọi `OS_CPU_SR_Save/Restore` (tên riêng của port ARM; port Nios II không có) | SRC-17 | `platform/osal/ports/ucos2/osal_ucos2.cpp` | Biên dịch với `ucos_ii.h`/`os_cpu.h` thật của Nios II; toàn bộ test (81) trên kernel uC/OS-II giả lập | `SIM` |
 
 ## 7. HAL – HAL
 
@@ -196,6 +198,11 @@ Macro cấu hình hiện có (mặc định): `EP_CFG_MAX_EVENT_SUBSCRIBERS` 16 
 | HAL-009 | Zynq UltraScale+ RPU (R5F): XGpioPs, XUartPs, XIicPs (polled, repeated start, I2C mux), EEPROM 24xx; flow classic + SDT | SRC-10 | `ports/zynqmp_r5/` | Biên dịch + link với driver embeddedsw | `CMP` |
 | HAL-010 | STM32F4: STM32Cube HAL | SRC-01 | `ports/stm32f4/` | – | `REF` |
 | HAL-011 | Cấu hình thiết bị lúc chạy bằng biến môi trường (board Linux/QNX), không cần build lại | SRC-10, SRC-11 | `env_or()` | Firmware QNX-shim, A53 | `SIM` |
+| HAL-012 | GPIO trên core PIO của Intel: truy cập `IORD/IOWR` (bỏ qua data cache); PIO chỉ-xuất dùng bản sao chung cho mọi chân cùng PIO (không đọc-sửa-ghi từ DATA); `Output/Input/Bidir/InOut`, OUTSET/OUTCLEAR, active-low; vùng găng bằng tắt ngắt (không spinlock) | SRC-17 | `platform/hal/ports/nios2/nios2_pio.hpp` | `test_nios2_pio.cpp` (3 test), mutation 5/5 | `VER` |
+| HAL-013 | `FlashRegionStorage`: INvStorage trên vùng flash NOR – vùng phải căn biên block (block đếm từ đầu **vùng** flash, hỗ trợ flash nhiều cỡ block), xóa theo block, chỉ lập trình + đọc lại kiểm tra | SRC-17 | `platform/hal/ports/common/flash/flash_region_storage.hpp` | `test_flash_region_storage.cpp` (4 test, gồm ParamStore lưu/nạp lại) | `VER` |
+| HAL-014 | `FdUart`: UART qua file descriptor không chặn chỉ dùng `open/read/write` (HAL Nios II không có `poll`/termios); chờ 1 ms bằng `hal::wait_ms` | SRC-17 | `platform/hal/ports/common/fdio/` | `fd_uart_nonblocking_io_and_timeouts_over_pty` | `VER` |
+| HAL-015 | Board port Nios II: console JTAG UART, aux UART, LED/nút PIO, I2C Intel Avalon **hoặc** OpenCores (repeated start, khóa bus chờ có nhường CPU), NV trên HAL flash API (EPCQ/on-chip/CFI); mặc định lấy từ `system.h`, ghi đè bằng `EP_NIOS2_*` | SRC-17 | `platform/hal/ports/nios2/nios2_board.cpp` | Biên dịch với header thật (cả 2 loại I2C) + chạy firmware trên HAL giả lập (VER-012) | `SIM` |
+| HAL-016 | Giới hạn: driver OpenCores I2C của Intel chờ vòng không timeout (bus kẹt treo task gọi); `reset()` Nios II chỉ là reset phần mềm (nhảy vector reset) | SRC-17 | Tài liệu | – | `RULE` |
 
 ## 8. Device – DEV
 
@@ -313,7 +320,8 @@ Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamCha
 | TGT-003 | Zynq UltraScale+ APU – `zynqmp_a53_linux` (PetaLinux/Yocto), `SCHED_FIFO`, `mlockall` | SRC-10 | `cmake/targets/zynqmp_a53_linux.cmake` | Cross build; test + firmware dưới qemu-aarch64 | `SIM` |
 | TGT-004 | Zynq UltraScale+ RPU – `zynqmp_r5_freertos` (BSP Vitis) | SRC-10 | `cmake/targets/zynqmp_r5_freertos.cmake` | Biên dịch + link với driver embeddedsw (`xparameters.h`/`FreeRTOSConfig.h` giả lập); thiếu symbol nội bộ BSP là dự kiến | `CMP` |
 | TGT-005 | QNX Neutrino 7.1 / 8.0 – `qnx` (aarch64le, x86_64), mọi board có BSP QNX | SRC-11 | `cmake/targets/qnx.cmake`, `platform/target/qnx/` | Biên dịch trên Linux với `hw/i2c.h` thật + lớp giả lập; **chưa qcc, chưa QNX thật** | `SIM` |
-| TGT-006 | Toolchain: `arm-none-eabi`, `armr5-none-eabi` (đổi tiền tố bằng `EP_ARMR5_PREFIX`; cờ CPU trong target để không mất khi tự đặt `CMAKE_CXX_FLAGS`), `aarch64-linux-gnu` (+ qemu), `qnx` (`QNX_HOST`/`QNX_TARGET`, `EP_QNX_ARCH`) | SRC-10, SRC-11 | `cmake/toolchains/` | Build tương ứng | `SIM` |
+| TGT-006 | Toolchain: `arm-none-eabi`, `armr5-none-eabi` (đổi tiền tố bằng `EP_ARMR5_PREFIX`; cờ CPU trong target để không mất khi tự đặt `CMAKE_CXX_FLAGS`), `aarch64-linux-gnu` (+ qemu), `qnx` (`QNX_HOST`/`QNX_TARGET`, `EP_QNX_ARCH`), `nios2-elf` (`EP_NIOS2_PREFIX`) | SRC-10, SRC-11, SRC-17 | `cmake/toolchains/` | Build tương ứng (nios2-elf: chưa có toolchain) | `SIM` |
+| TGT-007 | Intel Nios II + uC/OS-II – `nios2_ucos2` (BSP UCOSII): không gọi lại `OSInit()` (BSP đã gọi trước `main`), tick do BSP; cờ CPU / định nghĩa / thư viện BSP đọc từ `public.mk`; `OS_LOWEST_PRIO` thiếu → lỗi build có chỉ dẫn | SRC-17 | `cmake/targets/nios2_ucos2.cmake`, `platform/target/nios2_ucos2/` | Biên dịch bằng g++ host với header BSP thật; chạy trên kernel + HAL giả lập; **chưa nios2-elf-gcc, chưa FPGA** | `SIM` |
 
 ## 18. Sản phẩm – PROD
 
@@ -336,9 +344,10 @@ Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamCha
 | VER-006 | Lớp giả lập QNX (ngoài repo): `devctl` với TMP102 giả, `mmap_device_memory` trả vùng nhớ dùng chung theo địa chỉ vật lý, luồng lấy mẫu cạnh thanh ghi; header `hw/i2c.h` thật | HAL-007, TGT-005 | `SIM` |
 | VER-007 | Kiểm thử chéo giao thức bằng client độc lập: Modbus master qua pty, trạm mặt đất MAVLink tối giản (thư viện chuẩn, đối chiếu định dạng với pymavlink) | COMM-004/005 | `VER` |
 | VER-008 | Fuzz chuỗi cấu hình GPIO (1 triệu chuỗi dưới ASan/UBSan) | HAL-006 | `VER` |
-| VER-009 | Mutation test thủ công: cài lỗi có chủ đích, test phải bắt. Kết quả: MMIO 7/7, `QnxI2c` 4/4, worker 3/3, sensor 7/7 + 6/6, actuator 10/10 | Các tính năng mới | `VER` |
+| VER-009 | Mutation test thủ công: cài lỗi có chủ đích, test phải bắt. Kết quả: MMIO 7/7, `QnxI2c` 4/4, worker 3/3, sensor 7/7 + 6/6, actuator 10/10, PIO Nios II 5/5, flash 2/2 (+1 mutation tương đương), `FdUart` 1/1 | Các tính năng mới | `VER` |
 | VER-010 | Giới hạn công cụ đã biết: TSan của GCC 13 không chặn `pthread_mutex_clocklock` (`try_lock_for`) → code cần TSan kiểm tra dùng `try_lock(kNoWait)` + thử lại | VER-002 | `RULE` |
-| VER-011 | Chưa kiểm chứng: CPU ARM thật (thứ tự bộ nhớ yếu), phần cứng thật mọi target, qcc, BSP Vitis hoàn chỉnh, toolchain STM32 | – | `PLN` |
+| VER-011 | Chưa kiểm chứng: CPU ARM thật (thứ tự bộ nhớ yếu), phần cứng thật mọi target, qcc, BSP Vitis hoàn chỉnh, toolchain STM32, `nios2-elf-gcc` + FPGA | – | `PLN` |
+| VER-012 | Kiểm chứng Nios II không có toolchain (ngoài repo): biên dịch bằng g++ host với header thật của BSP Nios II công khai (DECA: `system.h`, HAL, driver, uC/OS-II bản Nios; driver I2C Avalon từ `hal_altera`, OpenCores từ BSP công khai), builtin nios2 thay bằng stub; chạy firmware với kernel uC/OS-II giả lập + HAL giả (thanh ghi trong bộ nhớ, flash lưu file, TMP102 trên I2C OpenCores, JTAG UART = pty) | TGT-007, HAL-015 | `SIM` |
 
 ## 20. Lỗi & nợ kỹ thuật đã biết – DEF
 
@@ -368,7 +377,9 @@ Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamCha
 | PLN-007 | Service bất đồng bộ kiểu yêu cầu/phản hồi (cặp event có `request_id`) | MSG-003 | `PLN` |
 | PLN-008 | Mô hình executor: sản phẩm gán module vào nhiều thread ứng dụng | APP-002, SMP | `PLN` |
 | PLN-009 | Giải quyết DEF-001 … DEF-008 | DEF | `PLN` |
-| PLN-010 | Chạy trên phần cứng thật: ZCU102 (APU + RPU), board QNX, STM32F407 | VER-011 | `PLN` |
+| PLN-010 | Chạy trên phần cứng thật: ZCU102 (APU + RPU), board QNX, STM32F407, board FPGA có Nios II (DE10-Lite, DECA…) | VER-011 | `PLN` |
+| PLN-011 | Nios II đã ngừng phát triển (Intel khuyến nghị Nios V – RISC-V): cân nhắc target Nios V (HAL tương tự, CPU RISC-V) | TGT-007 | `PLN` |
+| PLN-012 | Nios II: target FreeRTOS (port `portable/GCC/NiosII`), lwIP qua Triple-Speed Ethernet | TGT-007 | `PLN` |
 
 ---
 
@@ -394,6 +405,9 @@ Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamCha
 | `test_linux_hal.cpp` | `linux_missing_i2c_and_gpio_fail_cleanly` | HAL-002, HAL-003 |
 | `test_qnx_hal.cpp` (chỉ target qnx) | `qnx_missing_i2c_fails_cleanly`, `qnx_mmio_gpio_unconfigured_or_invalid` | HAL-007, HAL-003 |
 | `test_mmio_gpio.cpp` | `mmio_gpio_spec_parsing`, `mmio_gpio_rmw_dir_oen_and_shared_register`, `mmio_gpio_inverted_dir_set_clr_active_low`, `mmio_gpio_concurrent_rmw_keeps_both_updates` | HAL-006 |
+| `test_nios2_pio.cpp` | `nios2_pio_output_only_shares_shadow_between_pins`, `nios2_pio_active_low_set_clear_and_reset_value`, `nios2_pio_input_and_bidir_direction` | HAL-012 |
+| `test_flash_region_storage.cpp` | `flash_region_validates_alignment_and_device`, `flash_region_nor_semantics_and_cross_block_write`, `flash_region_spanning_regions_erases_right_blocks`, `flash_region_backs_param_store_across_restart` | HAL-013, SVC-001 |
+| `test_fd_uart.cpp` | `fd_uart_nonblocking_io_and_timeouts_over_pty` | HAL-014 |
 | `test_sensor_scheduler.cpp` | `topic_latest_value_and_stamp`, `topic_concurrent_readers_never_see_torn_values` | MSG-005, MSG-006 |
 | | `sensor_scheduler_runs_each_task_at_its_period`, `sensor_scheduler_does_not_drift_and_resets_after_overrun` | SNS-002 |
 | | `sensor_scheduler_fault_and_recovery_events`, `sensor_scheduler_validation`, `sensor_task_adapts_interface_method`, `sensor_hub_real_threads_and_start_failure_cleanup` | SNS-005, SNS-009, SNS-001, SNS-007 |
@@ -413,4 +427,5 @@ Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamCha
 | [#5](https://github.com/tractoan/EmbededFramework/pull/5) | `ModuleWorker` – thread riêng cho module | APP-001/004 |
 | [#6](https://github.com/tractoan/EmbededFramework/pull/6) | `Topic`, `SensorScheduler` (định kỳ + chặn + dòng byte) | MSG-005/006, SNS-001…010 |
 | [#7](https://github.com/tractoan/EmbededFramework/pull/7) | Actuator tự chủ + `ActuatorHub`; `PeriodicSchedule` dùng chung | ACT-001…011, APP-007 |
-| (PR này) | Tài liệu yêu cầu | SRC-16 |
+| [#8](https://github.com/tractoan/EmbededFramework/pull/8) | Tài liệu yêu cầu | SRC-16 |
+| (PR này) | Hỗ trợ Intel Nios II + uC/OS-II; sửa vùng găng port uC/OS-II | SRC-17, OSAL-007, HAL-012…016, TGT-006/007 |
