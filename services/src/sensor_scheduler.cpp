@@ -47,27 +47,19 @@ std::uint32_t SensorScheduler::run_due() {
     if (count_ == 0) return kPollMs;
     if (blocking()) return run_blocking_once();
     for (std::size_t i = 0; i < count_; ++i) {
-        Slot& s                    = slots_[i];
-        const std::uint32_t period = s.task->period_ms();
-        const std::uint64_t start  = now();
-        if (!s.scheduled) {   // lần đầu: lấy mẫu ngay
-            s.next_due  = start;
-            s.scheduled = true;
-        }
-        if (start < s.next_due) continue;
+        Slot& s                   = slots_[i];
+        const std::uint64_t start = now();
+        if (!s.schedule.due(start)) continue;   // lần đầu: lấy mẫu ngay
         const core::Status st     = s.task->sample(clock());
         const std::uint64_t after = now();
         const std::uint32_t exec  = after > start ? static_cast<std::uint32_t>(after - start) : 0u;
-        // Không trôi: mốc kế tiếp tính từ mốc trước. Đã trễ hơn một chu kỳ trọn vẹn (mốc đó cũng đã qua)
-        // -> đặt lại lịch từ bây giờ, không chạy dồn.
-        const bool overrun = after >= s.next_due + period;
-        s.next_due         = overrun ? after + period : s.next_due + period;
+        const bool overrun        = s.schedule.advance(after, s.task->period_ms());   // không trôi, không chạy dồn
         record(i, st, start, exec, overrun);
     }
     const std::uint64_t t = now();
     std::uint32_t wait    = kPollMs;
     for (std::size_t i = 0; i < count_; ++i) {
-        const std::uint32_t until = slots_[i].next_due > t ? static_cast<std::uint32_t>(slots_[i].next_due - t) : 0u;
+        const std::uint32_t until = slots_[i].schedule.wait(t, kPollMs);
         if (until < wait) wait = until;
     }
     return wait;

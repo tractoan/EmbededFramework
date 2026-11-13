@@ -55,6 +55,7 @@ private:
     TaskPlan tasks_;
     ModuleManager modules_;
     svc::SensorHub sensors_;
+    svc::ActuatorHub actuators_;
     comm::UartStream console_stream_;
     comm::Services comm_services_{bus_, params_, commands_};
     comm::LinkManager links_;

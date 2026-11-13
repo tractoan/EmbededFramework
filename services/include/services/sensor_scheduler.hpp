@@ -34,6 +34,7 @@
 #include "messaging/topic.hpp"
 #include "osal/mutex.hpp"
 #include "osal/thread.hpp"
+#include "services/periodic_schedule.hpp"
 
 #ifndef EP_CFG_MAX_SENSOR_TASKS
 #define EP_CFG_MAX_SENSOR_TASKS 8   // mỗi nhóm
@@ -219,8 +220,7 @@ private:
 
     struct Slot {
         ISensorTask* task       = nullptr;
-        std::uint64_t next_due  = 0;
-        bool scheduled          = false;
+        PeriodicSchedule schedule;
         SensorHealth health{};
     };
     Config cfg_{};
