@@ -226,7 +226,18 @@ void sleep_ms(std::uint32_t ms) {
 void yield() { OSTimeDly(1u); }
 
 // ------------------------------------------------------- CriticalSection
-CriticalSection::CriticalSection() { state_.sr = OS_CPU_SR_Save(); }
-CriticalSection::~CriticalSection() { OS_CPU_SR_Restore(state_.sr); }
+// Dùng macro chuẩn OS_ENTER_CRITICAL/OS_EXIT_CRITICAL (method 3: biến cục bộ `cpu_sr`) – có ở MỌI port
+// uC/OS-II. Không gọi OS_CPU_SR_Save/Restore trực tiếp: đó là tên riêng của port ARM (port Nios II dùng
+// alt_irq_disable_all/alt_irq_enable_all).
+CriticalSection::CriticalSection() {
+    OS_CPU_SR cpu_sr = 0;
+    OS_ENTER_CRITICAL();
+    state_.sr = cpu_sr;
+}
+CriticalSection::~CriticalSection() {
+    OS_CPU_SR cpu_sr = state_.sr;
+    OS_EXIT_CRITICAL();
+    (void)cpu_sr;
+}
 
 }  // namespace osal
