@@ -1,7 +1,8 @@
 #include "linux_peripherals.hpp"
 
+#include "linux/gpio_uapi.hpp"
+
 #include <fcntl.h>
-#include <linux/gpio.h>
 #include <linux/if_packet.h>
 #include <linux/serial.h>
 #include <linux/synclink.h>
@@ -175,34 +176,30 @@ Status LinuxGpio::configure(PinMode mode) {
         warn("open", dev);
         return Status::NotFound;
     }
-    gpio_v2_line_request req{};
-    req.offsets[0] = static_cast<std::uint32_t>(std::atoi(line.c_str()));
-    req.num_lines  = 1;
-    std::snprintf(req.consumer, sizeof(req.consumer), "ep_bringup");
-    const bool out = mode == PinMode::Output || mode == PinMode::OutputOpenDrain;
-    req.config.flags = out ? GPIO_V2_LINE_FLAG_OUTPUT : GPIO_V2_LINE_FLAG_INPUT;
-    if (mode == PinMode::OutputOpenDrain) req.config.flags |= GPIO_V2_LINE_FLAG_OPEN_DRAIN;
-    if (mode == PinMode::InputPullUp) req.config.flags |= GPIO_V2_LINE_FLAG_BIAS_PULL_UP;
-    if (mode == PinMode::InputPullDown) req.config.flags |= GPIO_V2_LINE_FLAG_BIAS_PULL_DOWN;
-    if (opt == "low") req.config.flags |= GPIO_V2_LINE_FLAG_ACTIVE_LOW;
-    const int r = ::ioctl(chip_fd, GPIO_V2_GET_LINE_IOCTL, &req);
+    host::gpio::LineRequest req;   // uAPI v2 hoặc v1 tùy header/kernel (common/linux/gpio_uapi.hpp)
+    req.offset     = static_cast<unsigned>(std::atoi(line.c_str()));
+    req.consumer   = "ep_bringup";
+    req.output     = mode == PinMode::Output || mode == PinMode::OutputOpenDrain;
+    req.initial    = false;   // output tắt ngay khi xin line
+    req.open_drain = mode == PinMode::OutputOpenDrain;
+    req.active_low = opt == "low";
+    req.bias       = mode == PinMode::InputPullUp ? host::gpio::Bias::PullUp
+                     : mode == PinMode::InputPullDown ? host::gpio::Bias::PullDown : host::gpio::Bias::None;
+    const int fd = host::gpio::request_line(chip_fd, req, abi_);
     ::close(chip_fd);
-    if (r < 0) {
-        warn("GPIO_V2_GET_LINE_IOCTL", spec_);
+    if (fd < 0) {
+        warn("GPIO line request", spec_);
         return Status::Error;
     }
-    line_fd_ = req.fd;
-    output_  = out;
-    if (out) write(false);
+    line_fd_ = fd;
+    output_  = req.output;
+    level_   = false;
     return Status::Ok;
 }
 
 Status LinuxGpio::write(bool level) {
     if (!output_ || line_fd_ < 0) return Status::NotSupported;
-    gpio_v2_line_values v{};
-    v.mask = 1;
-    v.bits = level ? 1 : 0;
-    if (::ioctl(line_fd_, GPIO_V2_LINE_SET_VALUES_IOCTL, &v) < 0) return Status::Error;
+    if (!host::gpio::set_value(line_fd_, abi_, level)) return Status::Error;
     level_ = level;
     return Status::Ok;
 }
@@ -210,10 +207,8 @@ Status LinuxGpio::write(bool level) {
 bool LinuxGpio::read() const {
     if (line_fd_ < 0) return false;
     if (output_) return level_;
-    gpio_v2_line_values v{};
-    v.mask = 1;
-    if (::ioctl(line_fd_, GPIO_V2_LINE_GET_VALUES_IOCTL, &v) < 0) return false;
-    return (v.bits & 1) != 0;
+    bool level = false;
+    return host::gpio::get_value(line_fd_, abi_, level) && level;
 }
 
 // ============================================================== LinuxHdlc

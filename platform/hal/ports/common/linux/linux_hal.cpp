@@ -1,4 +1,5 @@
 #include "linux/linux_hal.hpp"
+#include "linux/gpio_uapi.hpp"
 
 #include <fcntl.h>
 #include <linux/gpio.h>
@@ -82,38 +83,30 @@ Status GpioLine::configure(PinMode mode) {
     const int chip_fd = open_chip(chip_);
     if (chip_fd < 0) return Status::NotFound;
 
-    gpio_v2_line_request req{};
-    req.offsets[0] = offset_;
-    req.num_lines  = 1;
-    std::strncpy(req.consumer, consumer_ ? consumer_ : "ep", sizeof(req.consumer) - 1);
-    output_ = mode == PinMode::Output || mode == PinMode::OutputOpenDrain;
-    switch (mode) {
-        case PinMode::Input:           req.config.flags = GPIO_V2_LINE_FLAG_INPUT; break;
-        case PinMode::InputPullUp:     req.config.flags = GPIO_V2_LINE_FLAG_INPUT | GPIO_V2_LINE_FLAG_BIAS_PULL_UP; break;
-        case PinMode::InputPullDown:   req.config.flags = GPIO_V2_LINE_FLAG_INPUT | GPIO_V2_LINE_FLAG_BIAS_PULL_DOWN; break;
-        case PinMode::Output:          req.config.flags = GPIO_V2_LINE_FLAG_OUTPUT; break;
-        case PinMode::OutputOpenDrain: req.config.flags = GPIO_V2_LINE_FLAG_OUTPUT | GPIO_V2_LINE_FLAG_OPEN_DRAIN; break;
-    }
-    const int r = ::ioctl(chip_fd, GPIO_V2_GET_LINE_IOCTL, &req);
+    gpio::LineRequest req;   // uAPI v2 hoặc v1 tùy header/kernel (linux/gpio_uapi.hpp)
+    req.offset     = offset_;
+    req.consumer   = consumer_;
+    output_        = mode == PinMode::Output || mode == PinMode::OutputOpenDrain;
+    req.output     = output_;
+    req.open_drain = mode == PinMode::OutputOpenDrain;
+    req.bias       = mode == PinMode::InputPullUp ? gpio::Bias::PullUp
+                     : mode == PinMode::InputPullDown ? gpio::Bias::PullDown : gpio::Bias::None;
+    const int fd = gpio::request_line(chip_fd, req, abi_);
     ::close(chip_fd);   // giữ fd của line, không cần fd của chip
-    if (r != 0) return Status::Busy;   // line không tồn tại hoặc đang được dùng
-    line_fd_ = req.fd;
+    if (fd < 0) return Status::Busy;   // line không tồn tại hoặc đang được dùng
+    line_fd_ = fd;
     return Status::Ok;
 }
 
 Status GpioLine::write(bool level) {
     if (line_fd_ < 0 || !output_) return Status::NotSupported;
-    gpio_v2_line_values v{};
-    v.mask = 1;
-    v.bits = level ? 1 : 0;
-    return ::ioctl(line_fd_, GPIO_V2_LINE_SET_VALUES_IOCTL, &v) == 0 ? Status::Ok : Status::Error;
+    return gpio::set_value(line_fd_, abi_, level) ? Status::Ok : Status::Error;
 }
 
 bool GpioLine::read() const {
     if (line_fd_ < 0) return false;
-    gpio_v2_line_values v{};
-    v.mask = 1;
-    return ::ioctl(line_fd_, GPIO_V2_LINE_GET_VALUES_IOCTL, &v) == 0 && (v.bits & 1u) != 0;
+    bool level = false;
+    return gpio::get_value(line_fd_, abi_, level) && level;
 }
 
 }  // namespace hal::host

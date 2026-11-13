@@ -221,5 +221,7 @@ param list | set <n> <v> | save
 - Chỉ số cổng & chức năng: `bringup_config.hpp` (cổng GCS/GNSS, baudrate, cặp loopback, invert DI, định dạng + cấu hình HDLC của IMU).
 - Thiết bị Linux tương ứng: `platform/hal/ports/linux_cpu/board_config.hpp`, ghi đè lúc chạy bằng `EP_BOARD_CONF` hoặc `EP_SERIAL<i>`, `EP_DI<i>`,
   `EP_DO<i>`, `EP_HDLC<i>`, `EP_NVRAM` (ví dụ: `deploy/ep_board.conf.example`).
+- GPIO: Linux GPIO character device, uAPI **v2** (kernel >= 5.10) hoặc tự lùi về **v1** (kernel >= 4.8) khi header/kernel
+  cũ (`platform/hal/ports/common/linux/gpio_uapi.hpp`). Với v1 trên header < 5.5, kéo lên/kéo xuống (bias) bị bỏ qua.
 - Backend HDLC: `synclink:` (card SyncLink, cấu hình MGSL + N_HDLC), `nhdlc:` (tty đã cấu hình đồng bộ), `chardev:` (driver trả 1 khung/`read`),
   `packet:` (netdev generic-HDLC, cần `CAP_NET_RAW`).

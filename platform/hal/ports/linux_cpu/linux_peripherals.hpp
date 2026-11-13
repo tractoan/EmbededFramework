@@ -42,6 +42,7 @@ private:
     std::string spec_;
     bool output_;
     int line_fd_ = -1;
+    int abi_     = 2;       // GPIO uAPI của line_fd_ (1 hoặc 2, xem common/linux/gpio_uapi.hpp)
     bool level_  = false;   // giá trị ghi gần nhất (output)
 };
 

@@ -41,6 +41,7 @@ private:
     unsigned offset_;
     const char* consumer_;
     int line_fd_ = -1;
+    int abi_     = 2;       // GPIO uAPI của line_fd_ (1 hoặc 2)
     bool output_ = false;
 };
 
