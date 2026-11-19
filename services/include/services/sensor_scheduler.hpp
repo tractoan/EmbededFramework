@@ -24,6 +24,7 @@
 // Độ phân giải lịch định kỳ: đồng hồ OSAL (1 ms). Nhanh hơn 1 kHz / jitter < 1 ms: dùng Blocking chờ ngắt DRDY.
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 
 #include "core/config.hpp"
@@ -33,6 +34,7 @@
 #include "messaging/event_bus.hpp"
 #include "messaging/topic.hpp"
 #include "osal/mutex.hpp"
+#include "osal/semaphore.hpp"
 #include "osal/thread.hpp"
 #include "services/periodic_schedule.hpp"
 
@@ -71,19 +73,72 @@ public:
     virtual core::Status sample(SensorClock clock) = 0;
 };
 
+class SensorScheduler;
+
+// Nền chung của các adapter: KHÓA THIẾT BỊ, chu kỳ đổi được lúc chạy, bỏ mẫu sau khi đổi cấu hình.
+// Lấy mẫu và cấu hình (SensorConfigurator) không bao giờ chạm thiết bị cùng lúc: mỗi lần đọc giữ khóa,
+// cấu hình chen vào GIỮA hai lần đọc – không chờ nhịp lấy mẫu kế tiếp. Task chặn chờ theo lát kSliceMs
+// và nhả khóa giữa các lát -> cấu hình chờ tối đa ~kSliceMs.
+class SensorTaskBase : public ISensorTask {
+public:
+    static constexpr std::uint32_t kSliceMs = 10;
+
+    std::uint32_t period_ms() const override { return period_.load(); }
+    // Đổi chu kỳ (task chặn: timeout) – có hiệu lực NGAY: đánh thức scheduler để tính lại lịch.
+    core::Status set_period_ms(std::uint32_t ms);
+
+    // Khóa thiết bị cho CẤU HÌNH, chờ tối đa timeout_ms (thử không chờ + nghỉ 1 ms: hành vi như nhau mọi OS,
+    // TSan theo dõi được). Công bằng hai chiều: bên đang chờ báo hiệu, bên vừa nhả khóa nhường một nhịp ngắn –
+    // task chặn không giành lại khóa ngay giữa hai lát khi có cấu hình chờ, và cấu hình liên tục không bỏ đói
+    // việc lấy mẫu.
+    bool lock_device(std::uint32_t timeout_ms);
+    void unlock_device();
+    void discard_next(std::uint32_t samples) { discard_.store(samples); }   // bỏ N mẫu kế tiếp (thời gian ổn định)
+
+    void attach(SensorScheduler* owner) { owner_.store(owner); }   // SensorScheduler::add() gọi
+
+protected:
+    explicit SensorTaskBase(std::uint32_t period_ms) : period_(period_ms) {}
+    // Khóa thiết bị cho một lần đọc / một lát chờ (RAII).
+    class SamplingGuard {
+    public:
+        explicit SamplingGuard(SensorTaskBase& t) : t_(t) { t_.sampling_lock(); }
+        ~SamplingGuard() { t_.sampling_unlock(); }
+        SamplingGuard(const SamplingGuard&) = delete;
+        SamplingGuard& operator=(const SamplingGuard&) = delete;
+
+    private:
+        SensorTaskBase& t_;
+    };
+    bool take_discard();   // true: mẫu này phải bỏ (đọc được nhưng không publish)
+
+private:
+    void sampling_lock();
+    void sampling_unlock();
+    osal::Mutex dev_mtx_;
+    std::atomic<std::uint32_t> config_waiting_{0};
+    std::atomic<bool> sampler_waiting_{false};
+    std::atomic<std::uint32_t> period_;
+    std::atomic<std::uint32_t> discard_{0};
+    std::atomic<SensorScheduler*> owner_{nullptr};
+};
+
 // Định kỳ: Read là method của Device (có thể là interface, vd. &device::ITemperatureSensor::read_deci_celsius).
 template <typename Device, typename Sample, core::Status (Device::*Read)(Sample&)>
-class SensorTask final : public ISensorTask {
+class SensorTask final : public SensorTaskBase {
 public:
     SensorTask(const char* name, Device& device, msg::Topic<Sample>& out, std::uint32_t period_ms)
-        : name_(name), device_(device), out_(out), period_ms_(period_ms) {}
+        : SensorTaskBase(period_ms), name_(name), device_(device), out_(out) {}
 
     const char* name() const override { return name_; }
-    std::uint32_t period_ms() const override { return period_ms_; }
     core::Status sample(SensorClock clock) override {
         Sample s{};
-        const core::Status st = (device_.*Read)(s);
-        if (core::is_ok(st)) out_.publish(s, clock());
+        core::Status st;
+        {
+            SamplingGuard g(*this);
+            st = (device_.*Read)(s);
+        }
+        if (core::is_ok(st) && !take_discard()) out_.publish(s, clock());
         return st;
     }
 
@@ -91,68 +146,86 @@ private:
     const char* name_;
     Device& device_;
     msg::Topic<Sample>& out_;
-    std::uint32_t period_ms_;
 };
 
 // Chặn: driver có hàm đọc chờ dữ liệu với timeout, vd. chờ semaphore do ISR DRDY give_from_isr().
-// Read trả Ok khi có mẫu, Timeout khi hết thời gian chờ.
+// Read trả Ok khi có mẫu, Timeout khi hết thời gian chờ. Gọi Read theo lát kSliceMs (nhả khóa giữa các lát).
 template <typename Device, typename Sample, core::Status (Device::*Read)(Sample&, std::uint32_t)>
-class BlockingSensorTask final : public ISensorTask {
+class BlockingSensorTask final : public SensorTaskBase {
 public:
     BlockingSensorTask(const char* name, Device& device, msg::Topic<Sample>& out, std::uint32_t timeout_ms)
-        : name_(name), device_(device), out_(out), timeout_ms_(timeout_ms) {}
+        : SensorTaskBase(timeout_ms), name_(name), device_(device), out_(out) {}
 
     const char* name() const override { return name_; }
     SamplingMode mode() const override { return SamplingMode::Blocking; }
-    std::uint32_t period_ms() const override { return timeout_ms_; }
     core::Status sample(SensorClock clock) override {
-        Sample s{};
-        const core::Status st = (device_.*Read)(s, timeout_ms_);
-        if (core::is_ok(st)) out_.publish(s, clock());
-        return st;
+        const std::uint64_t deadline = clock() + period_ms();
+        for (;;) {
+            const std::uint64_t now  = clock();
+            const std::uint32_t left = now < deadline ? static_cast<std::uint32_t>(deadline - now) : 0u;
+            const std::uint32_t wait = left < kSliceMs ? left : kSliceMs;
+            Sample s{};
+            core::Status st;
+            {
+                SamplingGuard g(*this);
+                st = (device_.*Read)(s, wait);
+            }
+            if (core::is_ok(st)) {
+                if (!take_discard()) out_.publish(s, clock());
+                return st;
+            }
+            if (st != core::Status::Timeout || left == 0 || clock() >= deadline) return st;   // lỗi thật / hết hạn
+            if (clock() < now + wait) return st;   // Timeout trả về SỚM: driver không chờ -> không quay bận
+        }
     }
 
 private:
     const char* name_;
     Device& device_;
     msg::Topic<Sample>& out_;
-    std::uint32_t timeout_ms_;
 };
 
 // Chặn, dòng byte: đọc UART và đưa từng byte vào Parser cho tới khi ra MỘT mẫu hoàn chỉnh hoặc hết timeout.
 // Parser (thường ở lớp device: NMEA/UBX, SBUS/CRSF...) chỉ cần:  bool feed(std::uint8_t byte, Sample& out);
 //   trả true khi `out` vừa được điền một mẫu hoàn chỉnh; parser tự giữ trạng thái giữa các lần gọi
 //   (mẫu bị cắt ngang giữa hai lần đọc vẫn ghép đúng). Nhiều mẫu trong một lần đọc: publish từng mẫu.
+// Đọc theo lát kSliceMs, giữ khóa thiết bị (UART + parser) trong mỗi lát.
 template <typename Parser, typename Sample>
-class StreamSensorTask final : public ISensorTask {
+class StreamSensorTask final : public SensorTaskBase {
 public:
     static constexpr std::size_t kChunk = 32;   // byte mỗi lần đọc UART (buffer trên stack)
 
     StreamSensorTask(const char* name, hal::IUart& uart, Parser& parser, msg::Topic<Sample>& out,
                      std::uint32_t timeout_ms)
-        : name_(name), uart_(uart), parser_(parser), out_(out), timeout_ms_(timeout_ms) {}
+        : SensorTaskBase(timeout_ms), name_(name), uart_(uart), parser_(parser), out_(out) {}
 
     const char* name() const override { return name_; }
     SamplingMode mode() const override { return SamplingMode::Blocking; }
-    std::uint32_t period_ms() const override { return timeout_ms_; }
     core::Status sample(SensorClock clock) override {
-        const std::uint64_t deadline = clock() + timeout_ms_;
+        const std::uint64_t deadline = clock() + period_ms();
         bool got                     = false;
-        for (std::uint64_t now = clock(); !got; now = clock()) {
+        while (!got) {
+            const std::uint64_t now  = clock();
             const std::uint32_t left = now < deadline ? static_cast<std::uint32_t>(deadline - now) : 0u;
-            std::uint8_t buf[kChunk];
-            const std::size_t n = uart_.read(buf, sizeof(buf), left);
-            for (std::size_t i = 0; i < n; ++i) {
-                Sample s{};
-                if (parser_.feed(buf[i], s)) {
-                    out_.publish(s, clock());
-                    got = true;
+            const std::uint32_t wait = left < kSliceMs ? left : kSliceMs;
+            std::size_t n;
+            {
+                SamplingGuard g(*this);
+                std::uint8_t buf[kChunk];
+                n = uart_.read(buf, sizeof(buf), wait);
+                for (std::size_t i = 0; i < n; ++i) {
+                    Sample s{};
+                    if (parser_.feed(buf[i], s)) {
+                        if (!take_discard()) out_.publish(s, clock());
+                        got = true;
+                    }
                 }
             }
             bytes_ += static_cast<std::uint32_t>(n);
-            // 0 byte = lần đọc đã chờ hết thời gian còn lại (hoặc UART không chờ được: đóng/lỗi) -> dừng,
-            // không quay bận; scheduler nghỉ phần còn lại của timeout nếu trả về sớm.
-            if (n == 0 || left == 0) break;
+            if (got || left == 0) break;
+            // 0 byte mà trả về SỚM hơn thời gian chờ: UART không chờ được (đóng/lỗi) -> dừng, không quay bận;
+            // scheduler nghỉ phần còn lại của timeout.
+            if (n == 0 && clock() < now + wait) break;
         }
         return got ? core::Status::Ok : core::Status::Timeout;
     }
@@ -163,8 +236,58 @@ private:
     hal::IUart& uart_;
     Parser& parser_;
     msg::Topic<Sample>& out_;
-    std::uint32_t timeout_ms_;
     std::uint32_t bytes_ = 0;
+};
+
+// Cấu hình cảm biến, áp dụng NGAY trên thread người gọi (không chờ nhịp lấy mẫu): chiếm khóa thiết bị của
+// task (chờ tối đa lock_timeout_ms – một lần đọc đang dở / một lát chờ của task chặn), gọi Apply của driver,
+// nhả khóa; trả kết quả đồng bộ. Sau khi áp dụng thành công bỏ settle_samples mẫu kế tiếp (thời gian ổn định).
+//   static svc::SensorConfigurator<device::Tmp102, device::Tmp102Config, &device::Tmp102::apply> tmp_cfg{task, tmp102};
+//   tmp_cfg.configure({device::Tmp102Config::Rate::Hz8});   // Ok / lỗi bus / Busy
+template <typename Device, typename Config, core::Status (Device::*Apply)(const Config&)>
+class SensorConfigurator : core::NonCopyable {
+public:
+    SensorConfigurator(SensorTaskBase& task, Device& device, std::uint32_t settle_samples = 0,
+                       std::uint32_t lock_timeout_ms = 50)
+        : task_(task), device_(device), settle_(settle_samples), lock_timeout_ms_(lock_timeout_ms) {}
+
+    core::Status configure(const Config& cfg) {
+        if (!task_.lock_device(lock_timeout_ms_)) {
+            failures_.fetch_add(1);
+            return core::Status::Busy;   // thiết bị bận quá lâu (vd. driver kẹt)
+        }
+        const core::Status st = (device_.*Apply)(cfg);
+        if (core::is_ok(st)) {
+            {
+                osal::LockGuard g(mtx_);
+                current_ = cfg;
+                have_    = true;
+            }
+            if (settle_ != 0) task_.discard_next(settle_);
+            applied_.fetch_add(1);
+        } else {
+            failures_.fetch_add(1);
+        }
+        task_.unlock_device();
+        return st;
+    }
+    bool current(Config& out) const {   // cấu hình đang áp dụng (lần thành công gần nhất)
+        osal::LockGuard g(mtx_);
+        if (have_) out = current_;
+        return have_;
+    }
+    std::uint32_t applied() const { return applied_.load(); }
+    std::uint32_t failures() const { return failures_.load(); }
+
+private:
+    SensorTaskBase& task_;
+    Device& device_;
+    std::uint32_t settle_;
+    std::uint32_t lock_timeout_ms_;
+    mutable osal::Mutex mtx_;
+    Config current_{};
+    bool have_ = false;
+    std::atomic<std::uint32_t> applied_{0}, failures_{0};
 };
 
 struct SensorHealth {
@@ -195,6 +318,9 @@ public:
 
     // Trước start(). Task Blocking phải đứng một mình trong nhóm (InvalidArg nếu trộn).
     core::Status add(ISensorTask* task);
+    core::Status add(SensorTaskBase* task);   // + nhận thông báo đổi chu kỳ để áp dụng ngay
+    core::Status add(std::nullptr_t) { return core::Status::InvalidArg; }
+    void notify() { wake_.give(); }          // đánh thức thread để tính lại lịch (vd. đổi chu kỳ)
     bool blocking() const { return count_ == 1 && slots_[0].task->mode() == SamplingMode::Blocking; }
     // bus: nơi phát kSensorFault / kSensorRecovered (nullptr = không phát)
     core::Status start(const osal::ThreadConfig& thread, msg::EventBus* bus);
@@ -221,6 +347,8 @@ private:
     struct Slot {
         ISensorTask* task       = nullptr;
         PeriodicSchedule schedule;
+        std::uint32_t period    = 0;   // chu kỳ dùng cho lần lập lịch trước (phát hiện đổi chu kỳ)
+        std::uint64_t last_start = 0;
         SensorHealth health{};
     };
     Config cfg_{};
@@ -230,6 +358,7 @@ private:
     mutable osal::Mutex health_mtx_;   // chỉ bảo vệ Slot::health (đọc từ CLI); giữ rất ngắn
     osal::Thread thread_;
     std::atomic<bool> running_{false};
+    osal::Semaphore wake_{0, 1};
 };
 
 // Các nhóm cảm biến của sản phẩm; System khởi động trước module và dừng sau kênh truyền thông.

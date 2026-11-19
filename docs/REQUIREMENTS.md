@@ -5,9 +5,9 @@
 
 | | |
 |---|---|
-| Phiên bản tài liệu | 1.2 |
-| Ứng với code | `main` @ `6b104a9` (sau PR #9) + gộp output (`Output<Cmd>`, LED là output) |
-| Số test tự động | 93 test case (`tests/`) – 91 chạy trên host Linux; target QNX chạy 92 (thêm 2 test riêng QNX, không có test riêng Linux) |
+| Phiên bản tài liệu | 1.3 |
+| Ứng với code | `main` @ `0bb1a5f` (sau PR #10) + cấu hình cảm biến áp dụng ngay (`SensorConfigurator`, `SensorParamBinding`) |
+| Số test tự động | 100 test case (`tests/`) – 98 chạy trên host Linux; target QNX chạy 99 (thêm 2 test riêng QNX, không có test riêng Linux) |
 
 ---
 
@@ -115,6 +115,7 @@ thành `DROP` và ghi lý do. Yêu cầu tách đôi thì giữ mã cũ cho ph�
 | SRC-16 | Tài liệu yêu cầu chi tiết để cập nhật và truy vết (tài liệu này) |
 | SRC-17 | Bổ sung hỗ trợ Nios II |
 | SRC-18 | Gộp mọi output của hệ thống vào một cơ chế dùng chung; đổi tên `Actuator` → `Output` (phương án A: `Output<Cmd>`, `OutputHub`, `OutputClass::Actuator/Indicator`; `CommandOutput` → `CommandReply`); gộp LED |
+| SRC-19 | Cảm biến cần đường cấu hình; cấu hình phải **áp dụng ngay**, không chờ nhịp lấy mẫu |
 
 | Mã | Quyết định thiết kế rút ra từ thảo luận |
 |---|---|
@@ -126,6 +127,7 @@ thành `DROP` và ghi lý do. Yêu cầu tách đôi thì giữ mã cũ cho ph�
 | DD-06 | Output nhiều kênh cần đồng bộ (4 motor) → **một** output với lệnh nhiều kênh, không phải nhiều output |
 | DD-07 | Không làm "output scheduler" kiểu cảm biến cho tới khi có sản phẩm cần (≥ 3 output có thread cùng nhịp, RAM eo hẹp) |
 | DD-08 | Output phân loại theo mức an toàn: Actuator (nguy hiểm: arm, deadman, chốt khi kẹt, failsafe tắt) và Indicator (chỉ báo: failsafe KHÔNG tắt – không tắt đèn cảnh báo khi có sự cố) |
+| DD-09 | Cấu hình cảm biến chạy **đồng bộ trên thread gọi**, tuần tự với lấy mẫu bằng khóa thiết bị theo task (không xếp hàng chờ nhịp kế tiếp); task chặn chờ theo lát để nhả khóa |
 
 ---
 
@@ -212,6 +214,7 @@ Macro cấu hình hiện có (mặc định): `EP_CFG_MAX_EVENT_SUBSCRIBERS` 16 
 |---|---|---|---|---|---|
 | DEV-001 | Interface theo loại thiết bị + driver ngoài chip: `ITemperatureSensor`, `Tmp102` (I2C) | SRC-04 | `platform/device/` | Firmware (TMP102 giả trên QNX-shim) | `IMP` |
 | DEV-002 | Báo lỗi bằng `core::Status`; lớp trên quyết định log/phát event | SRC-04 | `platform/device/` | Review | `RULE` |
+| DEV-003 | `Tmp102::apply(Tmp102Config)`: tốc độ chuyển đổi (CR 0.25/1/4/8 Hz), chế độ mở rộng 13-bit (EM, tới 150 °C), shutdown (SD); read-modify-write thanh ghi cấu hình, giữ bit cảnh báo; chỉ đổi cách giải mã khi chip nhận cấu hình | SRC-19 | `platform/device/src/tmp102.cpp` | `tmp102_apply_rate_extended_shutdown_and_decoding` (+ mutation) | `VER` |
 
 ## 9. Mạng TCP/IP – NET
 
@@ -235,14 +238,14 @@ Macro cấu hình hiện có (mặc định): `EP_CFG_MAX_EVENT_SUBSCRIBERS` 16 
 | MSG-007 | EventBus không gọi được từ ISR; ISR dùng `utils::RingBuffer` rồi thread phát event | SRC-01 | Quy ước | – | `RULE` |
 
 Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamChanged` (+1), `kSensorFault` (+2),
-`kSensorRecovered` (+3), `kOutputSafe` (+4), `kOutputResumed` (+5) · `app::events::kTemperature` (+1),
+`kSensorRecovered` (+3), `kOutputSafe` (+4), `kOutputResumed` (+5), `kParamsLoaded` (+6) · `app::events::kTemperature` (+1),
 `kSensorFault` (+2), `kSensorRecovered` (+3), `kAlarmStateChanged` (+4), `kAlarmAckRequest` (+5), `kTemperatureBatch` (+6).
 
 ## 11. Services – SVC
 
 | Mã | Yêu cầu | Nguồn | Hiện thực | Kiểm chứng | Trạng thái |
 |---|---|---|---|---|---|
-| SVC-001 | `ParamStore`: đăng ký tham số (id, tên, mặc định, min/max, đơn vị), kiểm tra miền, phát `kParamChanged`, lưu NV có magic/version/CRC32; nạp bỏ qua giá trị ngoài miền/tham số lạ | SRC-01 | `services/src/param_store.cpp` | `param_store_validation_and_events`, `param_store_persistence_with_crc` | `VER` |
+| SVC-001 | `ParamStore`: đăng ký tham số (id, tên, mặc định, min/max, đơn vị), kiểm tra miền, phát `kParamChanged`, lưu NV có magic/version/CRC32; nạp bỏ qua giá trị ngoài miền/tham số lạ; sau mỗi `load()` phát `kParamsLoaded` (kèm kết quả) vì nạp đặt giá trị im lặng | SRC-01, SRC-19 | `services/src/param_store.cpp` | `param_store_validation_and_events`, `param_store_persistence_with_crc`, `sensor_param_binding_applies_saved_and_changed_params_immediately` | `VER` |
 | SVC-002 | `ParamStore` tuần tự hóa save/load (CLI + Modbus cùng lưu không hỏng NV; save sau luôn ghi giá trị mới hơn) | SRC-10 | `param_store.cpp` (`nv_mtx_`) | `param_store_concurrent_saves_keep_nv_valid` (+ mutation) | `VER` |
 | SVC-003 | `CommandService`: bảng lệnh tĩnh, phản hồi qua `CommandReply`, tách tham số tại chỗ (không `strtok_r`), `help`; handler chạy trên thread kênh gọi | SRC-01, SRC-10 | `command_service.cpp` | `cli_protocol_line_editing_and_dispatch` | `VER` |
 | SVC-004 | Lệnh `param list/get/set/save/reset` | SRC-01 | `param_cli.cpp` | Firmware mô phỏng | `IMP` |
@@ -264,6 +267,14 @@ Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamCha
 | SNS-008 | Đồng hồ truyền vào được (test tất định); `sample()` nhận đồng hồ | SRC-13 | `SensorScheduler::Config::clock` | Các test SNS dùng đồng hồ giả | `VER` |
 | SNS-009 | Kiểm tra tham số: task null, chu kỳ 0, quá `EP_CFG_MAX_SENSOR_TASKS`, start nhóm rỗng | SRC-13 | `sensor_scheduler.cpp` | `sensor_scheduler_validation` | `VER` |
 | SNS-010 | Độ phân giải lịch định kỳ 1 ms; nhanh hơn 1 kHz / jitter < 1 ms dùng task chặn chờ ngắt DRDY | SRC-14 | Tài liệu | – | `RULE` |
+| SNS-011 | Cấu hình cảm biến **áp dụng ngay** trên thread gọi: `SensorConfigurator<Device, Config, &Device::apply>::configure()` trả kết quả đồng bộ, không chờ nhịp lấy mẫu (chu kỳ 1000 ms vẫn áp dụng trong ~0 ms) | SRC-19, DD-09 | `sensor_scheduler.hpp` | `sensor_config_applies_immediately_not_at_next_tick` | `VER` |
+| SNS-012 | Cấu hình và lấy mẫu **không bao giờ** chạm thiết bị cùng lúc (khóa thiết bị theo task, `SensorTaskBase`) | SRC-19, DD-09 | `sensor_scheduler.hpp/.cpp` | `sensor_config_never_interleaves_with_a_read` (+ mutation) | `VER` |
+| SNS-013 | Task chặn / dòng byte chờ theo lát `kSliceMs` = 10 ms, nhả khóa giữa các lát → cấu hình chen vào trong ≤ 1 lát dù timeout dài; driver trả `Timeout` sớm hơn timeout được giao thì vòng lát dừng (không quay bận) | SRC-19 | `sensor_scheduler.hpp` | `sensor_config_reaches_blocking_task_within_a_slice` (1 ms với timeout 500 ms; + mutation), `sensor_blocking_fast_failure_backs_off` | `VER` |
+| SNS-014 | Công bằng hai chiều: luồng lấy mẫu nhường khi có cấu hình đang chờ; cấu hình liên tục nhường cho luồng lấy mẫu đang chờ (không bên nào bị bỏ đói) | SRC-19 | `sensor_scheduler.cpp` | `sensor_config_never_interleaves_with_a_read` (cấu hình liên tục 100 ms, `apply` 1 ms: ≥ 10 mẫu – thực đo 21–23; bỏ nhường: 0–1), `sensor_config_reaches_blocking_task_within_a_slice` (bỏ nhường: 54 ms) | `VER` |
+| SNS-015 | Chờ khóa thiết bị có giới hạn (`lock_timeout_ms`, mặc định 50 ms): quá hạn → `Busy`, đếm `failures()`; giữ cấu hình hiện hành (`current()`), đếm `applied()` | SRC-19 | `sensor_scheduler.hpp` | `sensor_config_busy_when_device_held_too_long_and_settle_discard` | `VER` |
+| SNS-016 | Settling: bỏ `settle_samples` mẫu kế tiếp sau khi đổi cấu hình (`discard_next`), không publish | SRC-19 | `sensor_scheduler.hpp/.cpp` | `sensor_config_busy_when_device_held_too_long_and_settle_discard` (+ mutation) | `VER` |
+| SNS-017 | Đổi chu kỳ có hiệu lực ngay: `set_period_ms()` đánh thức scheduler; lần kế tiếp = lần trước + chu kỳ **mới** | SRC-19 | `sensor_scheduler.cpp`, `periodic_schedule.hpp` | `sensor_period_change_takes_effect_immediately` (1000 → 10 ms: mẫu kế tiếp sau ~5 ms; + 2 mutation) | `VER` |
+| SNS-018 | Nối tham số → cảm biến: `SensorParamBinding` (`kParamsLoaded` + `kParamChanged` trong dải id → `configure()`), `SensorPeriodBinding` (chu kỳ theo tham số); listener trực tiếp, chặn có giới hạn (`lock_timeout_ms` + thời gian `apply`) – chỉ nối thiết bị có `apply()` ngắn | SRC-19 | `services/include/services/sensor_param_binding.hpp` | `sensor_param_binding_applies_saved_and_changed_params_immediately` (+ mutation) | `VER` |
 
 ## 13. Output (bộ chấp hành & chỉ báo) – ACT
 
@@ -351,7 +362,7 @@ Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamCha
 | VER-006 | Lớp giả lập QNX (ngoài repo): `devctl` với TMP102 giả, `mmap_device_memory` trả vùng nhớ dùng chung theo địa chỉ vật lý, luồng lấy mẫu cạnh thanh ghi; header `hw/i2c.h` thật | HAL-007, TGT-005 | `SIM` |
 | VER-007 | Kiểm thử chéo giao thức bằng client độc lập: Modbus master qua pty, trạm mặt đất MAVLink tối giản (thư viện chuẩn, đối chiếu định dạng với pymavlink) | COMM-004/005 | `VER` |
 | VER-008 | Fuzz chuỗi cấu hình GPIO (1 triệu chuỗi dưới ASan/UBSan) | HAL-006 | `VER` |
-| VER-009 | Mutation test thủ công: cài lỗi có chủ đích, test phải bắt. Kết quả: MMIO 7/7, `QnxI2c` 4/4, worker 3/3, sensor 7/7 + 6/6, actuator 10/10, output class + LED 6/6, PIO Nios II 5/5, flash 2/2 (+1 mutation tương đương), `FdUart` 1/1 | Các tính năng mới | `VER` |
+| VER-009 | Mutation test thủ công: cài lỗi có chủ đích, test phải bắt. Kết quả: MMIO 7/7, `QnxI2c` 4/4, worker 3/3, sensor 7/7 + 6/6, actuator 10/10, output class + LED 6/6, PIO Nios II 5/5, flash 2/2 (+1 mutation tương đương), `FdUart` 1/1, cấu hình cảm biến 9/9 | Các tính năng mới | `VER` |
 | VER-010 | Giới hạn công cụ đã biết: TSan của GCC 13 không chặn `pthread_mutex_clocklock` (`try_lock_for`) → code cần TSan kiểm tra dùng `try_lock(kNoWait)` + thử lại | VER-002 | `RULE` |
 | VER-011 | Chưa kiểm chứng: CPU ARM thật (thứ tự bộ nhớ yếu), phần cứng thật mọi target, qcc, BSP Vitis hoàn chỉnh, toolchain STM32, `nios2-elf-gcc` + FPGA | – | `PLN` |
 | VER-012 | Kiểm chứng Nios II không có toolchain (ngoài repo): biên dịch bằng g++ host với header thật của BSP Nios II công khai (DECA: `system.h`, HAL, driver, uC/OS-II bản Nios; driver I2C Avalon từ `hal_altera`, OpenCores từ BSP công khai), builtin nios2 thay bằng stub; chạy firmware với kernel uC/OS-II giả lập + HAL giả (thanh ghi trong bộ nhớ, flash lưu file, TMP102 trên I2C OpenCores, JTAG UART = pty) | TGT-007, HAL-015 | `SIM` |
@@ -370,6 +381,7 @@ Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamCha
 | DEF-008 | `TemperatureMonitor::on_tick` đọc I2C (chặn) trên thread "app" | APP-002 | Chuyển sang `SensorScheduler` + `Topic` | `DEF` |
 | DEF-009 | `Topic`/`SensorScheduler`/`Actuator` chưa được sản phẩm nào dùng (chỉ test) | SNS, ACT | Tích hợp vào sản phẩm (DEF-008) | `DEF` |
 | DEF-010 | Không xóa được branch trên GitHub từ môi trường phát triển (proxy chặn) – branch `feature/*` cũ còn trên remote | Vận hành | Xóa thủ công; bật "Automatically delete head branches" | `DEF` |
+| DEF-011 | Nhường khóa thiết bị (SNS-013/014) dùng `sleep_ms(1)`: trên RTOS tick thô (vd. 10 ms) mỗi lần nhường là một tick → cấu hình chen vào task chặn mất tới ~1 tick + 1 lát, lấy mẫu dưới cấu hình liên tục chậm lại; chỉ đo trên host Linux (1 ms) | SNS-013/014, RTOS tick > 1 ms | Nhường bằng `yield`/sự kiện "đã lấy khóa" thay vì ngủ; đo trên target thật | `DEF` |
 
 ## 21. Backlog – PLN
 
@@ -383,7 +395,7 @@ Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamCha
 | PLN-006 | MAVLink v2; tách `communication/mavlink/messages/`; sinh code từ XML dialect; mission protocol | COMM-005, DD-02 | `PLN` |
 | PLN-007 | Service bất đồng bộ kiểu yêu cầu/phản hồi (cặp event có `request_id`) | MSG-003 | `PLN` |
 | PLN-008 | Mô hình executor: sản phẩm gán module vào nhiều thread ứng dụng | APP-002, SMP | `PLN` |
-| PLN-009 | Giải quyết DEF-001 … DEF-008 | DEF | `PLN` |
+| PLN-009 | Giải quyết DEF-001 … DEF-008, DEF-011 | DEF | `PLN` |
 | PLN-010 | Chạy trên phần cứng thật: ZCU102 (APU + RPU), board QNX, STM32F407, board FPGA có Nios II (DE10-Lite, DECA…) | VER-011 | `PLN` |
 | PLN-011 | Nios II đã ngừng phát triển (Intel khuyến nghị Nios V – RISC-V): cân nhắc target Nios V (HAL tương tự, CPU RISC-V) | TGT-007 | `PLN` |
 | PLN-012 | Nios II: target FreeRTOS (port `portable/GCC/NiosII`), lwIP qua Triple-Speed Ethernet | TGT-007 | `PLN` |
@@ -419,6 +431,9 @@ Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamCha
 | | `sensor_scheduler_runs_each_task_at_its_period`, `sensor_scheduler_does_not_drift_and_resets_after_overrun` | SNS-002 |
 | | `sensor_scheduler_fault_and_recovery_events`, `sensor_scheduler_validation`, `sensor_task_adapts_interface_method`, `sensor_hub_real_threads_and_start_failure_cleanup` | SNS-005, SNS-009, SNS-001, SNS-007 |
 | `test_sensor_blocking.cpp` | `sensor_blocking_task_must_own_its_group`, `sensor_stream_task_parses_across_reads_and_resyncs`, `sensor_blocking_drdy_fault_recovery_and_stop_latency`, `sensor_blocking_fast_failure_backs_off` | SNS-003, SNS-004, SNS-005, SNS-006 |
+| `test_sensor_config.cpp` | `tmp102_apply_rate_extended_shutdown_and_decoding` | DEV-003 |
+| | `sensor_config_applies_immediately_not_at_next_tick`, `sensor_config_never_interleaves_with_a_read`, `sensor_config_busy_when_device_held_too_long_and_settle_discard`, `sensor_config_reaches_blocking_task_within_a_slice` | SNS-011 … SNS-016 |
+| | `sensor_period_change_takes_effect_immediately`, `sensor_param_binding_applies_saved_and_changed_params_immediately` | SNS-017, SNS-018, SVC-001 |
 | `test_output.cpp` | `output_direct_mode_arm_and_command`, `output_direct_no_output_after_force_safe_returns`, `output_deadman_forces_safe_and_new_command_resumes`, `output_servo_runs_its_own_pid_and_converges`, `output_threaded_deadman_runs_on_own_thread`, `output_hub_supervisor_detects_stall_and_deadman_with_real_threads`, `output_hub_start_failure_leaves_everything_safe`, `output_classes_failsafe_and_stall_policy_differ` | ACT-001 … ACT-012 |
 | `test_led_output.cpp` | `led_patterns_levels`, `led_output_is_an_indicator_driving_all_leds_in_one_frame`, `led_indicator_survives_failsafe_and_turns_off_at_shutdown` | SVC-006, ACT-003, ACT-012…014 |
 
@@ -437,4 +452,5 @@ Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamCha
 | [#7](https://github.com/tractoan/EmbededFramework/pull/7) | Actuator tự chủ + `ActuatorHub`; `PeriodicSchedule` dùng chung | ACT-001…011, APP-007 |
 | [#8](https://github.com/tractoan/EmbededFramework/pull/8) | Tài liệu yêu cầu | SRC-16 |
 | [#9](https://github.com/tractoan/EmbededFramework/pull/9) | Hỗ trợ Intel Nios II + uC/OS-II; sửa vùng găng port uC/OS-II | SRC-17, OSAL-007, HAL-012…016, TGT-006/007 |
-| (PR này) | Gộp output: `Actuator` → `Output`, `OutputClass` Actuator/Indicator, LED là output, giám sát chỉ khi cần; `CommandOutput` → `CommandReply` | SRC-18, DD-08, ACT-001…014, SVC-003/006/007, APP-007 |
+| [#10](https://github.com/tractoan/EmbededFramework/pull/10) | Gộp output: `Actuator` → `Output`, `OutputClass` Actuator/Indicator, LED là output, giám sát chỉ khi cần; `CommandOutput` → `CommandReply` | SRC-18, DD-08, ACT-001…014, SVC-003/006/007, APP-007 |
+| (PR này) | Cấu hình cảm biến áp dụng ngay: khóa thiết bị theo task, `SensorConfigurator`, chờ theo lát cho task chặn, đổi chu kỳ ngay, settling; `kParamsLoaded`; `SensorParamBinding`; cấu hình TMP102 | SRC-19, DD-09, SNS-011…018, DEV-003, SVC-001 |

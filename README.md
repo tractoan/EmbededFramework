@@ -150,7 +150,8 @@ EmbededFramework/
 │   └── include/messaging/      # event, event_bus, buffer, buffer_allocators, topic (ep_messaging)
 ├── services/
 │   └── include/services/       # param_store, param_cli, command_service, logger, led_service,
-│                               # sensor_scheduler (ISensorTask, SensorTask<>, SensorScheduler, SensorHub),
+│                               # sensor_scheduler (ISensorTask, SensorTask<>, SensorConfigurator<>, SensorScheduler, SensorHub),
+│                               # sensor_param_binding (tham số -> cấu hình cảm biến, áp dụng ngay),
 │                               # output (Output<Cmd>, OutputHub; LED là một output), periodic_schedule
 ├── communication/
 │   ├── link/                   # byte_stream, protocol, link_manager      (ep_comm)
@@ -292,6 +293,45 @@ chiếm CPU. Dừng nhóm chặn mất tối đa một timeout.
 Nhóm định kỳ theo **bus và nhịp**, không theo loại cảm biến: task trong một nhóm chạy tuần tự – cảm biến I2C
 chậm đặt chung nhóm với IMU 1 kHz sẽ làm trễ IMU. Lịch định kỳ theo đồng hồ OSAL (1 ms); nhanh hơn 1 kHz hoặc
 jitter dưới 1 ms: dùng task **chặn** chờ ngắt DRDY.
+
+#### Cấu hình cảm biến: áp dụng **ngay**, không chờ nhịp lấy mẫu
+
+```cpp
+static device::Tmp102 tmp102;                // tmp102.init(&i2c, 0x48) trong setup()
+static svc::SensorTask<device::Tmp102, std::int32_t, &device::Tmp102::read_deci_celsius> temp{"tmp102", tmp102, topic, 1000};
+static svc::SensorConfigurator<device::Tmp102, device::Tmp102Config, &device::Tmp102::apply>
+    tmp_cfg{temp, tmp102, /*settle_samples=*/1};
+
+device::Tmp102Config c;  c.rate = device::Tmp102Config::Rate::Hz8;  c.extended = true;
+core::Status st = tmp_cfg.configure(c);   // ghi chip NGAY trên thread gọi, trả kết quả đồng bộ
+temp.set_period_ms(125);                  // lịch mới có hiệu lực ngay (đánh thức scheduler)
+```
+
+| Thành phần | Trách nhiệm |
+|---|---|
+| `SensorTaskBase` | Khóa thiết bị **theo task**: lấy mẫu và cấu hình không bao giờ chạm chip cùng lúc; `set_period_ms()` đổi chu kỳ ngay; `discard_next(n)` bỏ n mẫu sau khi đổi cấu hình (settling) |
+| `SensorConfigurator<Device, Config, &Device::apply>` | `configure(cfg)`: chờ khóa tối đa `lock_timeout_ms` (mặc định 50 ms) → `apply()` → lưu cấu hình hiện hành, bỏ `settle_samples` mẫu kế tiếp; hết thời gian chờ → `Busy` (đếm `failures()`) |
+| `SensorParamBinding<Configurator, Config>` | Listener EventBus: `kParamsLoaded` (sau khi nạp NV) và `kParamChanged` trong dải `[first, last]` → `configure(build(params))` ngay trên thread vừa đổi tham số (CLI / Modbus / MAVLink) |
+| `SensorPeriodBinding` | Chu kỳ lấy mẫu (task chặn: timeout) theo một tham số |
+| `ParamStore` → `kParamsLoaded` | `load()` đặt giá trị **im lặng** (không phát `kParamChanged`), nên phát một sự kiện "đã nạp" để binding áp dụng giá trị đã lưu |
+
+Vì sao "ngay" mà vẫn an toàn:
+
+- **Task định kỳ**: `configure()` chỉ phải chờ tối đa **một lần đọc** đang dở (không chờ tới nhịp kế tiếp – với
+  chu kỳ 1000 ms vẫn áp dụng trong ~0 ms).
+- **Task chặn / dòng byte**: chờ dữ liệu theo **lát 10 ms** (`SensorTaskBase::kSliceMs`), nhả khóa giữa các lát
+  → cấu hình chen vào trong ≤ 1 lát dù timeout là 500 ms. Driver phải tôn trọng `timeout_ms` (driver trả
+  `Timeout` sớm hơn timeout được coi là không biết chờ và vòng lát dừng lại).
+- **Công bằng hai chiều**: luồng lấy mẫu thấy có cấu hình đang chờ thì nhường 1 ms sau khi nhả khóa; ngược lại
+  `configure()` liên tục (vd. tune qua MAVLink) nhường cho luồng lấy mẫu đang chờ → không bên nào bị bỏ đói,
+  kể cả khi bên cấu hình có priority cao hơn.
+- **Settling**: mẫu đọc ngay sau khi đổi dải/tốc độ có thể sai → `settle_samples` mẫu kế tiếp bị bỏ, không publish.
+- Đổi chu kỳ: lần lấy mẫu kế tiếp = lần trước + chu kỳ **mới** (không chờ hết lượt ngủ theo chu kỳ cũ).
+
+`SensorParamBinding` là ngoại lệ **có giới hạn** của quy tắc "listener không chặn": nó chờ khóa thiết bị tối đa
+`lock_timeout_ms` + thời gian ghi cấu hình. Chỉ nối cảm biến có `apply()` ngắn (vài thanh ghi I2C/SPI).
+`device::Tmp102::apply(Tmp102Config)` là ví dụ: tốc độ chuyển đổi (CR), chế độ 13-bit mở rộng (EM, tới
+150 °C), shutdown (SD) – read-modify-write thanh ghi cấu hình, giữ nguyên các bit cảnh báo.
 
 ### Output: `svc::Output<Cmd>` (mọi thứ đưa ra phần cứng – tự chủ, có thể có thread riêng)
 

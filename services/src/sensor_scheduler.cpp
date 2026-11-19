@@ -10,6 +10,59 @@ constexpr const char* kTag     = "sensors";
 constexpr std::uint32_t kPollMs = 50;   // chờ tối đa mỗi vòng để kịp thấy yêu cầu dừng
 }  // namespace
 
+// ------------------------------------------------------- SensorTaskBase
+core::Status SensorTaskBase::set_period_ms(std::uint32_t ms) {
+    if (ms == 0) return core::Status::InvalidArg;
+    period_.store(ms);
+    if (SensorScheduler* s = owner_.load()) s->notify();   // tính lại lịch ngay, không chờ hết lượt ngủ cũ
+    return core::Status::Ok;
+}
+
+bool SensorTaskBase::lock_device(std::uint32_t timeout_ms) {
+    config_waiting_.fetch_add(1);   // báo cho luồng lấy mẫu: nhường khóa giữa hai lát
+    bool ok = false;
+    for (std::uint32_t waited = 0;; ++waited) {
+        if (dev_mtx_.try_lock(osal::kNoWait)) {
+            ok = true;
+            break;
+        }
+        if (waited >= timeout_ms) break;
+        osal::sleep_ms(1);
+    }
+    config_waiting_.fetch_sub(1);
+    return ok;
+}
+
+void SensorTaskBase::unlock_device() {
+    dev_mtx_.unlock();
+    if (sampler_waiting_.load()) osal::sleep_ms(1);   // cấu hình liên tục không được bỏ đói việc lấy mẫu
+}
+
+void SensorTaskBase::sampling_lock() {
+    sampler_waiting_.store(true);
+    dev_mtx_.lock();
+    sampler_waiting_.store(false);
+}
+
+void SensorTaskBase::sampling_unlock() {
+    dev_mtx_.unlock();
+    if (config_waiting_.load() > 0) osal::sleep_ms(1);   // cho cấu hình đang chờ chen vào trước lát kế tiếp
+}
+
+bool SensorTaskBase::take_discard() {
+    std::uint32_t n = discard_.load();
+    while (n > 0 && !discard_.compare_exchange_weak(n, n - 1)) {
+    }
+    return n > 0;
+}
+
+// ------------------------------------------------------- SensorScheduler
+core::Status SensorScheduler::add(SensorTaskBase* task) {
+    const core::Status st = add(static_cast<ISensorTask*>(task));
+    if (core::is_ok(st)) task->attach(this);
+    return st;
+}
+
 core::Status SensorScheduler::add(ISensorTask* task) {
     if (task == nullptr || task->period_ms() == 0) return core::Status::InvalidArg;
     if (running_.load()) return core::Status::Busy;
@@ -47,13 +100,21 @@ std::uint32_t SensorScheduler::run_due() {
     if (count_ == 0) return kPollMs;
     if (blocking()) return run_blocking_once();
     for (std::size_t i = 0; i < count_; ++i) {
-        Slot& s                   = slots_[i];
-        const std::uint64_t start = now();
+        Slot& s                     = slots_[i];
+        const std::uint64_t start   = now();
+        const std::uint32_t period  = s.task->period_ms();
+        if (s.period != 0 && period != s.period) {   // chu kỳ vừa đổi: lần kế tiếp = lần trước + chu kỳ MỚI
+            s.schedule.reschedule(s.last_start + period);
+            osal::LockGuard g(health_mtx_);
+            s.health.period_ms = period;
+        }
+        s.period = period;
         if (!s.schedule.due(start)) continue;   // lần đầu: lấy mẫu ngay
+        s.last_start              = start;
         const core::Status st     = s.task->sample(clock());
         const std::uint64_t after = now();
         const std::uint32_t exec  = after > start ? static_cast<std::uint32_t>(after - start) : 0u;
-        const bool overrun        = s.schedule.advance(after, s.task->period_ms());   // không trôi, không chạy dồn
+        const bool overrun        = s.schedule.advance(after, period);   // không trôi, không chạy dồn
         record(i, st, start, exec, overrun);
     }
     const std::uint64_t t = now();
@@ -125,6 +186,7 @@ core::Status SensorScheduler::start(const osal::ThreadConfig& thread, msg::Event
 
 void SensorScheduler::stop() {
     running_ = false;
+    wake_.give();
     thread_.join();   // an toàn khi chưa từng start
 }
 
@@ -137,7 +199,7 @@ void SensorScheduler::run() {
         }
         while (wait > 0 && running_.load()) {   // ngủ ĐỦ, chia lát để kịp thấy yêu cầu dừng
             const std::uint32_t step = wait < kPollMs ? wait : kPollMs;
-            osal::sleep_ms(step);
+            if (wake_.take(step)) break;           // notify(): chu kỳ đổi -> tính lại lịch ngay
             wait -= step;
         }
     }
