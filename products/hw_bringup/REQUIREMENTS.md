@@ -170,6 +170,7 @@
 | 2026-11-13 | | Cập nhật theo main (đặc tả yêu cầu framework `docs/REQUIREMENTS.md`): bổ sung các yêu cầu tầng framework của nhánh (HAL-017…020, DEV-003…006, SVC-008/009, COMM-008/009, TGT-008, PROD-005…007, DEF-011…016). |
 | 2026-11-19 | | Cập nhật theo main (PR #10, gộp output): `CommandOutput` → `CommandReply` trong các module bring-up; LED là output loại Indicator (`sys outputs`); mã framework của nhánh bị trùng được đánh số lại – SRC-19…22, DD-09/10. DO vẫn chưa chuyển sang `Output<Cmd>` (cần quyết định arm/deadman, PLN-013). Không đổi yêu cầu. |
 | 2026-11-19 | | DIO-08, DIO-09, MAV-10: DO chuyển sang cơ chế output của framework (`svc::DigitalOutputs`, `Output` loại Actuator): an toàn lúc khởi động/tắt, arm/disarm từ GUI (`MAV_CMD_COMPONENT_ARM_DISARM`, CLI `io arm|disarm`), tự arm khi khởi động (`io.do_arm`), deadman tùy chọn (mặc định tắt); `IO_STATUS` thêm trường mở rộng `output_state`. Thêm 1 thread giám sát output (`out_sup`). |
+| 2026-11-19 | | Cập nhật theo main (PR #11, cấu hình cảm biến): không đổi code sản phẩm (IMU vẫn đọc qua `SensorScheduler` nhóm Blocking); mã framework của nhánh bị trùng được đánh số lại – SRC-21…25, DD-11/12, DEF-012…017, DEV-004…007. Không đổi yêu cầu. |
 | | | |
 
 ---

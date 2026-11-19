@@ -23,11 +23,18 @@ struct ParamDef {
 // Event do services phát (dải msg::evt::kServiceBase).
 namespace evt {
 inline constexpr msg::EventId kParamChanged = msg::evt::kServiceBase + 1;   // payload: svc::ParamChanged
+// Sau mỗi lần load() (thành công hay không – giá trị mặc định cũng là "đã sẵn sàng"): ai cấu hình theo tham số
+// (vd. SensorParamBinding) áp dụng giá trị hiện tại. load() đặt giá trị trực tiếp, không phát kParamChanged.
+inline constexpr msg::EventId kParamsLoaded = msg::evt::kServiceBase + 6;   // payload: svc::ParamsLoaded
 }  // namespace evt
 
 struct ParamChanged {   // payload của evt::kParamChanged
     ParamId id;
     std::int32_t value;
+};
+
+struct ParamsLoaded {   // payload của evt::kParamsLoaded
+    core::Status result;   // Ok: đã nạp từ NV; khác: đang dùng mặc định
 };
 
 // Kho tham số cấu hình runtime: kiểm tra miền giá trị, lưu NV có CRC,
@@ -47,7 +54,7 @@ public:
     std::size_t count() const;
     const ParamDef* at(std::size_t index, std::int32_t* value = nullptr) const;
 
-    core::Status load();   // đọc từ NV (giá trị ngoài miền bị bỏ qua)
+    core::Status load();   // đọc từ NV (giá trị ngoài miền bị bỏ qua); luôn phát evt::kParamsLoaded
     core::Status save();   // erase + ghi lại toàn bộ
 
 private:
@@ -56,6 +63,7 @@ private:
         std::int32_t value  = 0;
     };
     int index_of(ParamId id) const;   // gọi khi đang giữ khóa
+    core::Status load_from_nv();
 
     std::array<Entry, core::cfg::kMaxParams> entries_{};
     std::size_t count_          = 0;

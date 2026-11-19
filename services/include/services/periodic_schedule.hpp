@@ -29,6 +29,11 @@ public:
         return d < cap ? static_cast<std::uint32_t>(d) : cap;
     }
     void reset() { started_ = false; }
+    // Đặt mốc kế tiếp (vd. chu kỳ vừa đổi: lần trước + chu kỳ mới; mốc đã qua -> đến hạn ngay).
+    void reschedule(std::uint64_t next_due) {
+        next_due_ = next_due;
+        started_  = true;
+    }
 
 private:
     std::uint64_t next_due_ = 0;
