@@ -114,10 +114,10 @@ thành `DROP` và ghi lý do. Yêu cầu tách đôi thì giữ mã cũ cho ph�
 | SRC-15 | Output/actuator có thể có thread riêng để tự xử lý (vd. servo với PID nội bộ); **không** đẩy PID lên business; target hướng tới platform cho drone |
 | SRC-16 | Tài liệu yêu cầu chi tiết để cập nhật và truy vết (tài liệu này) |
 | SRC-17 | Bổ sung hỗ trợ Nios II |
-| SRC-18 | Firmware bring-up phần cứng chạy trên CPU, giao tiếp phần mềm giao diện qua MAVLink: 12 serial RS232/485 (1 giao diện, 1 GNSS – không có dữ liệu trong 5 s thì chuyển loopback, 10 loopback), 20 DI, 20 DO, 2 IMU SDLC/HDLC (chi tiết: `products/hw_bringup/REQUIREMENTS.md`) |
-| SRC-19 | Giải mã NMEA của máy thu GNSS, gửi thời gian, vĩ độ, kinh độ lên PC |
-| SRC-20 | Phân rõ service (cơ chế dùng chung) và business (chính sách); GNSS thành service; định nghĩa bản tin dialect MAVLink vào `communication/` |
-| SRC-21 | Build được với header kernel Linux cũ (< 5.10, không có GPIO uAPI v2) |
+| SRC-19 | Firmware bring-up phần cứng chạy trên CPU, giao tiếp phần mềm giao diện qua MAVLink: 12 serial RS232/485 (1 giao diện, 1 GNSS – không có dữ liệu trong 5 s thì chuyển loopback, 10 loopback), 20 DI, 20 DO, 2 IMU SDLC/HDLC (chi tiết: `products/hw_bringup/REQUIREMENTS.md`) |
+| SRC-20 | Giải mã NMEA của máy thu GNSS, gửi thời gian, vĩ độ, kinh độ lên PC |
+| SRC-21 | Phân rõ service (cơ chế dùng chung) và business (chính sách); GNSS thành service; định nghĩa bản tin dialect MAVLink vào `communication/` |
+| SRC-22 | Build được với header kernel Linux cũ (< 5.10, không có GPIO uAPI v2) |
 
 | Mã | Quyết định thiết kế rút ra từ thảo luận |
 |---|---|
@@ -128,8 +128,8 @@ thành `DROP` và ghi lý do. Yêu cầu tách đôi thì giữ mã cũ cho ph�
 | DD-05 | Device không tự tạo thread; thread do service/sản phẩm cấp |
 | DD-06 | Output nhiều kênh cần đồng bộ (4 motor) → **một** actuator với lệnh nhiều kênh, không phải nhiều actuator |
 | DD-07 | Không làm "output scheduler" kiểu cảm biến cho tới khi có sản phẩm cần (≥ 3 actuator thread cùng nhịp, RAM eo hẹp) |
-| DD-08 | Dialect MAVLink tách đôi: định nghĩa bản tin trên dây ở `communication/mavlink2/dialects/<d>/` (không phụ thuộc nghiệp vụ); ánh xạ Event ↔ bản tin ở sản phẩm (`IDialect`) vì cần event của business |
-| DD-09 | MAVLink v1 (`communication/mavlink`, bảng ánh xạ telemetry) và v2 + dialect (`communication/mavlink2`) tồn tại song song; sản phẩm chọn lúc build. Gộp là PLN-006 |
+| DD-09 | Dialect MAVLink tách đôi: định nghĩa bản tin trên dây ở `communication/mavlink2/dialects/<d>/` (không phụ thuộc nghiệp vụ); ánh xạ Event ↔ bản tin ở sản phẩm (`IDialect`) vì cần event của business |
+| DD-10 | MAVLink v1 (`communication/mavlink`, bảng ánh xạ telemetry) và v2 + dialect (`communication/mavlink2`) tồn tại song song; sản phẩm chọn lúc build. Gộp là PLN-006 |
 
 ---
 
@@ -209,10 +209,10 @@ Macro cấu hình hiện có (mặc định): `EP_CFG_MAX_EVENT_SUBSCRIBERS` 16 
 | HAL-014 | `FdUart`: UART qua file descriptor không chặn chỉ dùng `open/read/write` (HAL Nios II không có `poll`/termios); chờ 1 ms bằng `hal::wait_ms` | SRC-17 | `platform/hal/ports/common/fdio/` | `fd_uart_nonblocking_io_and_timeouts_over_pty` | `VER` |
 | HAL-015 | Board port Nios II: console JTAG UART, aux UART, LED/nút PIO, I2C Intel Avalon **hoặc** OpenCores (repeated start, khóa bus chờ có nhường CPU), NV trên HAL flash API (EPCQ/on-chip/CFI); mặc định lấy từ `system.h`, ghi đè bằng `EP_NIOS2_*` | SRC-17 | `platform/hal/ports/nios2/nios2_board.cpp` | Biên dịch với header thật (cả 2 loại I2C) + chạy firmware trên HAL giả lập (VER-012) | `SIM` |
 | HAL-016 | Giới hạn: driver OpenCores I2C của Intel chờ vòng không timeout (bus kẹt treo task gọi); `reset()` Nios II chỉ là reset phần mềm (nhảy vector reset) | SRC-17 | Tài liệu | – | `RULE` |
-| HAL-017 | Tài nguyên dạng mảng trên `IBoard` (mặc định rỗng – board cũ không phải sửa): `serial(i)`, `digital_input(i)`, `digital_output(i)`, `hdlc(i)`; `IHdlcPort` (cổng SDLC/HDLC theo khung: bitrate, mã hóa, clock, FCS; trạng thái khung crc/overrun/abort) | SRC-18 | `platform/hal/include/hal/board.hpp`, `hal/hdlc.hpp` | Cổng HDLC giả trong `hdlc_imu_blocking_read_with_sensor_scheduler`; board `linux_sim`, `linux_cpu` | `VER` |
-| HAL-018 | Port `linux_cpu` (CPU Linux của bo bring-up): tty termios + RS485 (`:rs485`, `:rs485-echo` qua `TIOCSRS485`), GPIO chardev (bias, active-low), HDLC qua SyncLink (`MGSL_IOCSPARAMS` + `N_HDLC`), `nhdlc:`, `chardev:`, `packet:` (AF_PACKET); ánh xạ thiết bị bằng `EP_BOARD_CONF` / `EP_SERIAL<i>`…; thiết bị vắng chỉ cảnh báo | SRC-18 | `platform/hal/ports/linux_cpu/` | Serial qua pty (VER-014); GPIO/HDLC chưa chạy thiết bị thật | `SIM` |
-| HAL-019 | GPIO chardev tương thích header/kernel cũ: có `GPIO_V2_GET_LINE_IOCTL` → v2 (mức output đặt ngay khi xin line; kernel trả `ENOTTY` → lùi v1 lúc chạy); chỉ có v1 → `GPIOHANDLE_*` (bias khi header ≥ 5.5); ép v1 bằng `EP_GPIO_UAPI_V1_ONLY` | SRC-21 | `platform/hal/ports/common/linux/gpio_uapi.hpp` (dùng bởi `GpioLine`, `LinuxGpio`) | Build `linux_cpu` với `linux/gpio.h` đã xóa phần v2 (code cũ tái hiện lỗi, code mới sạch + toàn bộ test); build ép v1 + test; chưa chạy chip GPIO thật | `CMP` |
-| HAL-020 | Phần cứng bring-up mô phỏng trong `linux_sim`: 12 serial (`EP_SIM_SERIAL<i>` = `udp:` / `gnss[:ms]` / `loop` / `broken` / `silent`), máy thu GNSS giả (GGA+RMC, trả lời lệnh, đổi baud), DI nối vòng DO (`EP_SIM_DI_STUCK`), 2 IMU HDLC 400/100 Hz (`EP_SIM_IMU_OFF`); bộ đệm cố định (không heap lúc chạy) | SRC-18 | `platform/hal/ports/linux_sim/sim_bringup.*` | Firmware `hw_bringup` mô phỏng (ASan/TSan) + công cụ GCS | `IMP` |
+| HAL-017 | Tài nguyên dạng mảng trên `IBoard` (mặc định rỗng – board cũ không phải sửa): `serial(i)`, `digital_input(i)`, `digital_output(i)`, `hdlc(i)`; `IHdlcPort` (cổng SDLC/HDLC theo khung: bitrate, mã hóa, clock, FCS; trạng thái khung crc/overrun/abort) | SRC-19 | `platform/hal/include/hal/board.hpp`, `hal/hdlc.hpp` | Cổng HDLC giả trong `hdlc_imu_blocking_read_with_sensor_scheduler`; board `linux_sim`, `linux_cpu` | `VER` |
+| HAL-018 | Port `linux_cpu` (CPU Linux của bo bring-up): tty termios + RS485 (`:rs485`, `:rs485-echo` qua `TIOCSRS485`), GPIO chardev (bias, active-low), HDLC qua SyncLink (`MGSL_IOCSPARAMS` + `N_HDLC`), `nhdlc:`, `chardev:`, `packet:` (AF_PACKET); ánh xạ thiết bị bằng `EP_BOARD_CONF` / `EP_SERIAL<i>`…; thiết bị vắng chỉ cảnh báo | SRC-19 | `platform/hal/ports/linux_cpu/` | Serial qua pty (VER-014); GPIO/HDLC chưa chạy thiết bị thật | `SIM` |
+| HAL-019 | GPIO chardev tương thích header/kernel cũ: có `GPIO_V2_GET_LINE_IOCTL` → v2 (mức output đặt ngay khi xin line; kernel trả `ENOTTY` → lùi v1 lúc chạy); chỉ có v1 → `GPIOHANDLE_*` (bias khi header ≥ 5.5); ép v1 bằng `EP_GPIO_UAPI_V1_ONLY` | SRC-22 | `platform/hal/ports/common/linux/gpio_uapi.hpp` (dùng bởi `GpioLine`, `LinuxGpio`) | Build `linux_cpu` với `linux/gpio.h` đã xóa phần v2 (code cũ tái hiện lỗi, code mới sạch + toàn bộ test); build ép v1 + test; chưa chạy chip GPIO thật | `CMP` |
+| HAL-020 | Phần cứng bring-up mô phỏng trong `linux_sim`: 12 serial (`EP_SIM_SERIAL<i>` = `udp:` / `gnss[:ms]` / `loop` / `broken` / `silent`), máy thu GNSS giả (GGA+RMC, trả lời lệnh, đổi baud), DI nối vòng DO (`EP_SIM_DI_STUCK`), 2 IMU HDLC 400/100 Hz (`EP_SIM_IMU_OFF`); bộ đệm cố định (không heap lúc chạy) | SRC-19 | `platform/hal/ports/linux_sim/sim_bringup.*` | Firmware `hw_bringup` mô phỏng (ASan/TSan) + công cụ GCS | `IMP` |
 
 ## 8. Device – DEV
 
@@ -220,10 +220,10 @@ Macro cấu hình hiện có (mặc định): `EP_CFG_MAX_EVENT_SUBSCRIBERS` 16 
 |---|---|---|---|---|---|
 | DEV-001 | Interface theo loại thiết bị + driver ngoài chip: `ITemperatureSensor`, `Tmp102` (I2C) | SRC-04 | `platform/device/` | Firmware (TMP102 giả trên QNX-shim) | `IMP` |
 | DEV-002 | Báo lỗi bằng `core::Status`; lớp trên quyết định log/phát event | SRC-04 | `platform/device/` | Review | `RULE` |
-| DEV-003 | Nhóm cổng số: `IDigitalInputs` / `IDigitalOutputs` (bit i = kênh i, ≤ 32), `GpioInputBank` (đảo mức theo mask), `GpioOutputBank` (ghi theo mask, thread-safe) | SRC-18 | `platform/device/include/device/digital_io.hpp` | `digital_io_banks` | `VER` |
-| DEV-004 | Giải mã khung IMU theo bảng `ImuFormat` (offset, độ rộng, endian, LSB, gia số/tốc độ, byte nhận dạng, checksum Sum16/NegSum16/CRC X.25); định dạng tham khảo `ln200`, `hg1700` | SRC-18 | `platform/device/include/device/imu.hpp`, `src/imu_format.cpp` | `imu_decode_formats` (khung mẫu tự dựng – **chưa đối chiếu ICD**, DEF-015) | `VER` |
-| DEV-005 | Driver `HdlcImu` không thread: `read(sample, timeout)` chờ một khung hợp lệ (FCS phần cứng hoặc phần mềm), bỏ khung lỗi, thống kê khung/lỗi/tần số; dùng với `BlockingSensorTask` | SRC-18, DD-05 | `platform/device/include/device/hdlc_imu.hpp` | `hdlc_imu_driver_counters_and_software_fcs`, `hdlc_imu_blocking_read_with_sensor_scheduler` | `VER` |
-| DEV-006 | Bộ giải mã NMEA 0183 (`NmeaParser`): nhận từng byte, bắt buộc checksum, GGA + RMC mọi talker, số nguyên (lat/lon 1e-7 độ, giờ ms, ngày, thời gian UNIX), chịu rác nhị phân / câu quá dài | SRC-19 | `platform/device/include/device/nmea.hpp` | `nmea_gga_rmc_reference_sentences`, `nmea_hemispheres_talkers_and_invalid_fix`, `nmea_robustness` | `VER` |
+| DEV-003 | Nhóm cổng số: `IDigitalInputs` / `IDigitalOutputs` (bit i = kênh i, ≤ 32), `GpioInputBank` (đảo mức theo mask), `GpioOutputBank` (ghi theo mask, thread-safe) | SRC-19 | `platform/device/include/device/digital_io.hpp` | `digital_io_banks` | `VER` |
+| DEV-004 | Giải mã khung IMU theo bảng `ImuFormat` (offset, độ rộng, endian, LSB, gia số/tốc độ, byte nhận dạng, checksum Sum16/NegSum16/CRC X.25); định dạng tham khảo `ln200`, `hg1700` | SRC-19 | `platform/device/include/device/imu.hpp`, `src/imu_format.cpp` | `imu_decode_formats` (khung mẫu tự dựng – **chưa đối chiếu ICD**, DEF-015) | `VER` |
+| DEV-005 | Driver `HdlcImu` không thread: `read(sample, timeout)` chờ một khung hợp lệ (FCS phần cứng hoặc phần mềm), bỏ khung lỗi, thống kê khung/lỗi/tần số; dùng với `BlockingSensorTask` | SRC-19, DD-05 | `platform/device/include/device/hdlc_imu.hpp` | `hdlc_imu_driver_counters_and_software_fcs`, `hdlc_imu_blocking_read_with_sensor_scheduler` | `VER` |
+| DEV-006 | Bộ giải mã NMEA 0183 (`NmeaParser`): nhận từng byte, bắt buộc checksum, GGA + RMC mọi talker, số nguyên (lat/lon 1e-7 độ, giờ ms, ngày, thời gian UNIX), chịu rác nhị phân / câu quá dài | SRC-20 | `platform/device/include/device/nmea.hpp` | `nmea_gga_rmc_reference_sentences`, `nmea_hemispheres_talkers_and_invalid_fix`, `nmea_robustness` | `VER` |
 
 ## 9. Mạng TCP/IP – NET
 
@@ -261,8 +261,8 @@ Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamCha
 | SVC-005 | `Logger`: mức log, nhiều sink (≤ `EP_CFG_LOG_SINKS`), loại bỏ mức thấp lúc biên dịch (`EP_CFG_LOG_LEVEL`) | SRC-01 | `logger.cpp` | Gián tiếp qua các test | `IMP` |
 | SVC-006 | `LedService`: mẫu Off/On/BlinkSlow/BlinkFast/Heartbeat, thread riêng 50 ms; nghiệp vụ không biết chân GPIO | SRC-01 | `led_service.cpp` | Firmware QNX-shim (đếm cạnh thanh ghi) | `SIM` |
 | SVC-007 | Lệnh `sys info / modules / sensors / actuators / tasks / buffers / log / reboot / quit` | SRC-01 | `app/runtime/src/system.cpp` | Firmware mô phỏng | `IMP` |
-| SVC-008 | `SerialPortBank` (`ISerialPorts`): mỗi cổng một thread, chế độ đổi lúc chạy Off / Loopback (khung thử 18 B có seq + CRC; PASS/TIMEOUT/MISMATCH/OPEN-ERR; nối chéo cặp cổng) / Stream (ring buffer, ghi từ thread khác, đổi baud) / External; priority/stack theo cổng | SRC-18 | `services/include/services/serial_port_bank.hpp` | `serial_bank_loopback_stream_and_pairs`, `serial_bank_cross_pair_pass` | `VER` |
-| SVC-009 | `GnssReceiver` (`IGnssReceiver`): thread riêng trên cổng Stream; giải mã NMEA, gom một fix mỗi GGA (RMC nếu không có GGA 2 s) với số thứ tự, tap byte thô, hàng đợi lệnh + đổi baud không chặn, thống kê; không có khái niệm bring-up | SRC-19, SRC-20, DD-03 | `services/include/services/gnss_receiver.hpp` | `gnss_receiver_service_parses_taps_and_sends` | `VER` |
+| SVC-008 | `SerialPortBank` (`ISerialPorts`): mỗi cổng một thread, chế độ đổi lúc chạy Off / Loopback (khung thử 18 B có seq + CRC; PASS/TIMEOUT/MISMATCH/OPEN-ERR; nối chéo cặp cổng) / Stream (ring buffer, ghi từ thread khác, đổi baud) / External; priority/stack theo cổng | SRC-19 | `services/include/services/serial_port_bank.hpp` | `serial_bank_loopback_stream_and_pairs`, `serial_bank_cross_pair_pass` | `VER` |
+| SVC-009 | `GnssReceiver` (`IGnssReceiver`): thread riêng trên cổng Stream; giải mã NMEA, gom một fix mỗi GGA (RMC nếu không có GGA 2 s) với số thứ tự, tap byte thô, hàng đợi lệnh + đổi baud không chặn, thống kê; không có khái niệm bring-up | SRC-20, SRC-21, DD-03 | `services/include/services/gnss_receiver.hpp` | `gnss_receiver_service_parses_taps_and_sends` | `VER` |
 
 ## 12. Lấy mẫu cảm biến – SNS
 
@@ -318,8 +318,8 @@ Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamCha
 | COMM-005 | MAVLink v1: HEARTBEAT, PARAM_REQUEST_READ/LIST, PARAM_VALUE, PARAM_SET, COMMAND_LONG/ACK, NAMED_VALUE_FLOAT, STATUSTEXT; CRC_EXTRA; parser đồng bộ lại; giám sát liên kết GCS | SRC-09 | `communication/mavlink/`, `products/thermo_pro/mavlink_map.cpp` | `test_mavlink.cpp` (6 test), client độc lập (VER-007) | `VER` |
 | COMM-006 | Luồng mạng: `TcpServerStream` (phiên), `TcpClientStream` (tự kết nối lại), `UdpStream` (trả lời người gửi) | SRC-09 | `communication/net/` | `net_tcp_server_stream_sessions`, `net_tcp_client_stream_reconnects`, `net_udp_stream_remote_and_reply_to_sender` | `VER` |
 | COMM-007 | Ánh xạ miền ↔ đường truyền ở sản phẩm; `communication` không biết module nghiệp vụ | SRC-03, DD-02 | `products/*/..._map.cpp` | Review | `RULE` |
-| COMM-008 | MAVLink v2 (`ep_proto_mavlink2`): khung v2 (msgid 24 bit, cắt byte 0 cuối), nhận cả v1, bỏ qua chữ ký; parser bộ đệm quét lại từng byte (STX giả không làm mất khung); HEARTBEAT, PARAM_* ↔ ParamStore, COMMAND_LONG/ACK, `MAV_CMD_PREFLIGHT_STORAGE`, giám sát GCS; bản tin riêng qua `IDialect` | SRC-03, SRC-18, DD-09 | `communication/mavlink2/` | `test_mavlink2.cpp` (4 test, khung mẫu từ pymavlink), VER-013 | `VER` |
-| COMM-009 | Dialect `bringup` (62000–62005: BRINGUP_STATUS, SERIAL_LOOPBACK_STATUS, IO_STATUS, OUTPUT_SET, IMU_DATA, GNSS_FIX) + GPS_RAW_INT, SERIAL_CONTROL: định nghĩa trên dây ở `communication/`, nguồn XML ở `tools/mavlink/bringup.xml`; CRC_EXTRA/độ dài C++ đối chiếu XML trong ctest | SRC-18, SRC-19, DD-08 | `communication/mavlink2/dialects/bringup/`, `products/hw_bringup/mavlink_dialect.cpp` | `bringup_dialect_maps_events_and_messages`, ctest `mavlink_dialect_check`, VER-013 | `VER` |
+| COMM-008 | MAVLink v2 (`ep_proto_mavlink2`): khung v2 (msgid 24 bit, cắt byte 0 cuối), nhận cả v1, bỏ qua chữ ký; parser bộ đệm quét lại từng byte (STX giả không làm mất khung); HEARTBEAT, PARAM_* ↔ ParamStore, COMMAND_LONG/ACK, `MAV_CMD_PREFLIGHT_STORAGE`, giám sát GCS; bản tin riêng qua `IDialect` | SRC-03, SRC-19, DD-10 | `communication/mavlink2/` | `test_mavlink2.cpp` (4 test, khung mẫu từ pymavlink), VER-013 | `VER` |
+| COMM-009 | Dialect `bringup` (62000–62005: BRINGUP_STATUS, SERIAL_LOOPBACK_STATUS, IO_STATUS, OUTPUT_SET, IMU_DATA, GNSS_FIX) + GPS_RAW_INT, SERIAL_CONTROL: định nghĩa trên dây ở `communication/`, nguồn XML ở `tools/mavlink/bringup.xml`; CRC_EXTRA/độ dài C++ đối chiếu XML trong ctest | SRC-19, SRC-20, DD-09 | `communication/mavlink2/dialects/bringup/`, `products/hw_bringup/mavlink_dialect.cpp` | `bringup_dialect_maps_events_and_messages`, ctest `mavlink_dialect_check`, VER-013 | `VER` |
 
 ## 16. Utils – UTIL
 
@@ -328,7 +328,7 @@ Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamCha
 | UTIL-001 | CRC32, CRC16-CCITT, CRC16-Modbus, CRC16-MCRF4XX (MAVLink, có CRC_EXTRA); tính nối tiếp được | SRC-02 | `utils/include/utils/crc.hpp` | `utils_crc_known_vectors` | `VER` |
 | UTIL-002 | Định dạng fixed-point không dùng `printf %f` | SRC-02 | `fixed_point.hpp` | `utils_format_fixed` | `VER` |
 | UTIL-003 | `RingBuffer<T,N>` SPSC lock-free (ISR → thread) | SRC-02 | `ring_buffer.hpp` | `utils_ring_buffer_spsc` | `VER` |
-| UTIL-004 | CRC-16/X-25 (FCS-16 HDLC/SDLC) | SRC-18 | `crc.hpp` (`crc16_x25`) | `utils_crc_known_vectors` | `VER` |
+| UTIL-004 | CRC-16/X-25 (FCS-16 HDLC/SDLC) | SRC-19 | `crc.hpp` (`crc16_x25`) | `utils_crc_known_vectors` | `VER` |
 
 ## 17. Target & toolchain – TGT
 
@@ -341,7 +341,7 @@ Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamCha
 | TGT-005 | QNX Neutrino 7.1 / 8.0 – `qnx` (aarch64le, x86_64), mọi board có BSP QNX | SRC-11 | `cmake/targets/qnx.cmake`, `platform/target/qnx/` | Biên dịch trên Linux với `hw/i2c.h` thật + lớp giả lập; **chưa qcc, chưa QNX thật** | `SIM` |
 | TGT-006 | Toolchain: `arm-none-eabi`, `armr5-none-eabi` (đổi tiền tố bằng `EP_ARMR5_PREFIX`; cờ CPU trong target để không mất khi tự đặt `CMAKE_CXX_FLAGS`), `aarch64-linux-gnu` (+ qemu), `qnx` (`QNX_HOST`/`QNX_TARGET`, `EP_QNX_ARCH`), `nios2-elf` (`EP_NIOS2_PREFIX`) | SRC-10, SRC-11, SRC-17 | `cmake/toolchains/` | Build tương ứng (nios2-elf: chưa có toolchain) | `SIM` |
 | TGT-007 | Intel Nios II + uC/OS-II – `nios2_ucos2` (BSP UCOSII): không gọi lại `OSInit()` (BSP đã gọi trước `main`), tick do BSP; cờ CPU / định nghĩa / thư viện BSP đọc từ `public.mk`; `OS_LOWEST_PRIO` thiếu → lỗi build có chỉ dẫn | SRC-17 | `cmake/targets/nios2_ucos2.cmake`, `platform/target/nios2_ucos2/` | Biên dịch bằng g++ host với header BSP thật; chạy trên kernel + HAL giả lập; **chưa nios2-elf-gcc, chưa FPGA** | `SIM` |
-| TGT-008 | `linux_cpu`: CPU Linux thật của bo bring-up (`EP_HAL_COMMON` posix;linux, TCP/IP, `SCHED_FIFO` qua `EP_POSIX_REALTIME`), chạy như dịch vụ systemd | SRC-18 | `cmake/targets/linux_cpu.cmake`, `platform/target/linux_cpu/` | Build + toàn bộ test; firmware trên pty (VER-014) | `SIM` |
+| TGT-008 | `linux_cpu`: CPU Linux thật của bo bring-up (`EP_HAL_COMMON` posix;linux, TCP/IP, `SCHED_FIFO` qua `EP_POSIX_REALTIME`), chạy như dịch vụ systemd | SRC-19 | `cmake/targets/linux_cpu.cmake`, `platform/target/linux_cpu/` | Build + toàn bộ test; firmware trên pty (VER-014) | `SIM` |
 
 ## 18. Sản phẩm – PROD
 
@@ -351,9 +351,9 @@ Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamCha
 | PROD-002 | `thermo_lite`: 2 module, chỉ CLI console, pool Buffer 128×4, stack pool 8 KB, tối đa 6 thread, log mức 2 | SRC-01 | `products/thermo_lite/` | Toàn bộ test với cấu hình lite | `VER` |
 | PROD-003 | Module nghiệp vụ tái sử dụng: `TemperatureMonitor` (chu kỳ, offset, cửa sổ lọc, ngưỡng lỗi, lô mẫu qua Buffer), `AlarmController` (Normal/Warning/Alarm/Fault, trễ, chốt, xác nhận, LED) | SRC-01 | `app/business/` | `alarm_thresholds_hysteresis_and_latch`, `alarm_runtime_reconfiguration_and_fault` | `VER` |
 | PROD-004 | Tham số: `0x10xx` nhiệt độ, `0x11xx` cảnh báo, `0x0200 + i` `comm.<kênh>`, `0x8000+` riêng sản phẩm | SRC-01 | `app/business/app_params.hpp`, `link_manager.hpp` | Review | `RULE` |
-| PROD-005 | `hw_bringup`: bring-up phần cứng qua MAVLink v2 (serial + UDP 14560) – yêu cầu chi tiết, có mã riêng (SER/GNS/DIO/IMU/MAV…) ở `products/hw_bringup/REQUIREMENTS.md` | SRC-18, SRC-19 | `products/hw_bringup/` | Test module + dialect; firmware mô phỏng + công cụ `tools/mavlink/bringup_gcs.py`, pymavlink | `VER` |
-| PROD-006 | Module bring-up tái sử dụng (chỉ chính sách): `SerialBringup` (loopback, vai trò cổng), `GnssBringup` (cửa sổ phát hiện → loopback, fix/thô/lệnh), `IoBringup`, `ImuBringup` (đọc `Topic` của nhóm `SensorScheduler`) | SRC-18, SRC-20 | `app/business/*_bringup/` | `serial_bringup_loopback_report_and_roles`, `gnss_bringup_*`, `io_bringup_outputs_and_inputs`, `imu_bringup_reports_samples_and_failures` | `VER` |
-| PROD-007 | Tham số bring-up `0x12xx` (`ser.*` 0x1201–0x1203, `gnss.*` 0x1211–0x1213, `io.report_ms` 0x1221, `imu.*` 0x1231–0x1232), tên ≤ 16 ký tự (PARAM_* MAVLink) | SRC-18 | `app/business/app_params.hpp` | Review | `RULE` |
+| PROD-005 | `hw_bringup`: bring-up phần cứng qua MAVLink v2 (serial + UDP 14560) – yêu cầu chi tiết, có mã riêng (SER/GNS/DIO/IMU/MAV…) ở `products/hw_bringup/REQUIREMENTS.md` | SRC-19, SRC-20 | `products/hw_bringup/` | Test module + dialect; firmware mô phỏng + công cụ `tools/mavlink/bringup_gcs.py`, pymavlink | `VER` |
+| PROD-006 | Module bring-up tái sử dụng (chỉ chính sách): `SerialBringup` (loopback, vai trò cổng), `GnssBringup` (cửa sổ phát hiện → loopback, fix/thô/lệnh), `IoBringup`, `ImuBringup` (đọc `Topic` của nhóm `SensorScheduler`) | SRC-19, SRC-21 | `app/business/*_bringup/` | `serial_bringup_loopback_report_and_roles`, `gnss_bringup_*`, `io_bringup_outputs_and_inputs`, `imu_bringup_reports_samples_and_failures` | `VER` |
+| PROD-007 | Tham số bring-up `0x12xx` (`ser.*` 0x1201–0x1203, `gnss.*` 0x1211–0x1213, `io.report_ms` 0x1221, `imu.*` 0x1231–0x1232), tên ≤ 16 ký tự (PARAM_* MAVLink) | SRC-19 | `app/business/app_params.hpp` | Review | `RULE` |
 
 ## 19. Kiểm chứng – VER
 
