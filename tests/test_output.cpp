@@ -1,4 +1,4 @@
-// svc::Actuator<Cmd> / ActuatorHub: chế độ trực tiếp, thread riêng (servo PID nội bộ), arm, deadman,
+// svc::Output<Cmd> / OutputHub: chế độ trực tiếp, thread riêng (servo PID nội bộ), arm, deadman,
 // phát hiện thread kẹt, giám sát bằng thread thật.
 #include <atomic>
 #include <chrono>
@@ -8,7 +8,7 @@
 #include "mocks.hpp"
 #include "osal/memory.hpp"
 #include "osal/time.hpp"
-#include "services/actuator.hpp"
+#include "services/output.hpp"
 #include "test_framework.hpp"
 
 namespace {
@@ -28,10 +28,10 @@ bool wait_until(Pred p, int timeout_ms = 2000) {
 struct RelayCmd {
     bool on;
 };
-class Relay final : public svc::Actuator<RelayCmd> {
+class Relay final : public svc::Output<RelayCmd> {
 public:
-    explicit Relay(svc::ActuatorClock clock = nullptr, std::uint32_t timeout = 0)
-        : Actuator("relay", Config{0, timeout, 0, clock}) {}
+    explicit Relay(svc::OutputClock clock = nullptr, std::uint32_t timeout = 0)
+        : Output("relay", Config{0, timeout, 0, clock}) {}
     std::atomic<int> pin{-1};   // -1 = chưa ghi lần nào; 0 = mở (an toàn); 1 = đóng
     std::atomic<std::thread::id> writer{};
     std::atomic<int> on_writes{0};
@@ -56,10 +56,10 @@ struct Plant {   // mô hình vật lý: vận tốc tỉ lệ điện áp, có 
         pos += vel * dt;
     }
 };
-class Servo final : public svc::Actuator<ServoCmd> {
+class Servo final : public svc::Output<ServoCmd> {
 public:
-    Servo(Plant& plant, svc::ActuatorClock clock = nullptr, std::uint32_t timeout = 0, std::uint32_t period = 2)
-        : Actuator("servo", Config{period, timeout, 0, clock}), plant_(plant) {}
+    Servo(Plant& plant, svc::OutputClock clock = nullptr, std::uint32_t timeout = 0, std::uint32_t period = 2)
+        : Output("servo", Config{period, timeout, 0, clock}), plant_(plant) {}
     std::atomic<float> drive{0};          // "PWM" đang xuất, -1..1; 0 = an toàn
     std::atomic<int> non_safe_writes{0};
     std::atomic<bool> hang{false};        // mô phỏng thread bị kẹt trong on_update
@@ -85,7 +85,7 @@ private:
 };
 }  // namespace
 
-TEST(actuator_direct_mode_arm_and_command) {
+TEST(output_direct_mode_arm_and_command) {
     msg::EventBus bus;
     mock::Recorder rec;
     bus.subscribe(msg::evt::kAny, &rec);
@@ -103,22 +103,22 @@ TEST(actuator_direct_mode_arm_and_command) {
     CHECK_EQ(relay.pin.load(), 1);                          // ghi ngay ...
     CHECK(relay.writer.load() == std::this_thread::get_id());   // ... trên thread người gọi
     CHECK(relay.reason() == svc::SafeReason::None);
-    CHECK_EQ(rec.count(svc::evt::kActuatorResumed), 1u);
+    CHECK_EQ(rec.count(svc::evt::kOutputResumed), 1u);
 
     relay.disarm();
     CHECK_EQ(relay.pin.load(), 0);
     CHECK(relay.command({true}) == core::Status::Busy);
     CHECK_EQ(relay.pin.load(), 0);
-    const svc::ActuatorStatus s = relay.status();
+    const svc::OutputStatus s = relay.status();
     CHECK(!s.threaded && !s.armed && s.commands == 1 && s.rejected == 2);
-    svc::ActuatorEvent ev{};
-    CHECK(rec.events.back().id == svc::evt::kActuatorSafe && rec.events.back().get(ev) &&
+    svc::OutputEvent ev{};
+    CHECK(rec.events.back().id == svc::evt::kOutputSafe && rec.events.back().get(ev) &&
           ev.reason == svc::SafeReason::NotArmed);
 }
 
 // Chế độ trực tiếp: lệnh đã được nhận nhưng force_safe() chen vào trước khi kịp ghi phần cứng -> lần ghi đó
 // phải bị bỏ. Sau khi force_safe() trả về, không được có thêm lần "đóng" nào (race – lặp nhiều lần).
-TEST(actuator_direct_no_output_after_force_safe_returns) {
+TEST(output_direct_no_output_after_force_safe_returns) {
     Relay relay;
     int violations = 0;
     for (int round = 0; round < 300; ++round) {
@@ -139,7 +139,7 @@ TEST(actuator_direct_no_output_after_force_safe_returns) {
     CHECK_EQ(violations, 0);
 }
 
-TEST(actuator_deadman_forces_safe_and_new_command_resumes) {
+TEST(output_deadman_forces_safe_and_new_command_resumes) {
     g_clock = 0;
     msg::EventBus bus;
     mock::Recorder rec;
@@ -154,17 +154,17 @@ TEST(actuator_deadman_forces_safe_and_new_command_resumes) {
     relay.supervise(70);
     CHECK_EQ(relay.pin.load(), 0);                          // 60 ms > 50 ms: deadman
     CHECK(relay.reason() == svc::SafeReason::CommandTimeout);
-    CHECK_EQ(rec.count(svc::evt::kActuatorSafe), 1u);
+    CHECK_EQ(rec.count(svc::evt::kOutputSafe), 1u);
     relay.supervise(90);
-    CHECK_EQ(rec.count(svc::evt::kActuatorSafe), 1u);       // không phát lặp
+    CHECK_EQ(rec.count(svc::evt::kOutputSafe), 1u);       // không phát lặp
     g_clock = 95;
     CHECK(core::is_ok(relay.command({true})));               // lệnh mới: tự xuất lại (không cần arm lại)
     CHECK_EQ(relay.pin.load(), 1);
     CHECK(relay.reason() == svc::SafeReason::None);
-    CHECK_EQ(rec.count(svc::evt::kActuatorResumed), 2u);
+    CHECK_EQ(rec.count(svc::evt::kOutputResumed), 2u);
 }
 
-TEST(actuator_servo_runs_its_own_pid_and_converges) {
+TEST(output_servo_runs_its_own_pid_and_converges) {
     g_clock = 0;
     Plant plant;
     Servo servo(plant, &fake_clock);
@@ -190,7 +190,7 @@ TEST(actuator_servo_runs_its_own_pid_and_converges) {
     CHECK(std::fabs(plant.pos + 10.0f) < 0.5f);
 }
 
-TEST(actuator_threaded_deadman_runs_on_own_thread) {
+TEST(output_threaded_deadman_runs_on_own_thread) {
     g_clock = 0;
     Plant plant;
     Servo servo(plant, &fake_clock, 30, 10);   // thread riêng 10 ms, deadman 30 ms
@@ -216,12 +216,12 @@ TEST(actuator_threaded_deadman_runs_on_own_thread) {
     CHECK(servo.reason() == svc::SafeReason::CommandTimeout);
 }
 
-TEST(actuator_hub_supervisor_detects_stall_and_deadman_with_real_threads) {
+TEST(output_hub_supervisor_detects_stall_and_deadman_with_real_threads) {
     msg::EventBus bus;
     Plant plant;
     Servo servo(plant, nullptr, 40, 2);   // thread riêng 2 ms, deadman 40 ms, kẹt sau 20 ms
     Relay relay(nullptr, 40);
-    svc::ActuatorHub hub;
+    svc::OutputHub hub;
     CHECK(core::is_ok(hub.add(&servo, {"servo", osal::Priority::High, 2048, nullptr})));
     CHECK(core::is_ok(hub.add(&relay)));
     hub.write_safe_all();
@@ -265,10 +265,10 @@ TEST(actuator_hub_supervisor_detects_stall_and_deadman_with_real_threads) {
     CHECK(servo.command({15.0f}) == core::Status::Busy);
 }
 
-TEST(actuator_hub_start_failure_leaves_everything_safe) {
+TEST(output_hub_start_failure_leaves_everything_safe) {
     Plant p1, p2;
     Servo ok(p1), bad(p2);
-    svc::ActuatorHub hub;
+    svc::OutputHub hub;
     hub.add(&ok, {"ok", osal::Priority::High, 2048, nullptr});
     hub.add(&bad, {"bad", osal::Priority::High, osal::stack_pool_stats().capacity * 2, nullptr});   // vượt pool
     const std::size_t threads_before = osal::thread_count();
@@ -277,4 +277,43 @@ TEST(actuator_hub_start_failure_leaves_everything_safe) {
     CHECK(ok.reason() == svc::SafeReason::Shutdown && ok.drive.load() == 0.0f);
     CHECK(ok.command({1.0f}) == core::Status::Busy);
     CHECK(hub.add(nullptr) == core::Status::InvalidArg);
+}
+
+// Hub có cả actuator và indicator: failsafe chỉ tắt actuator; indicator kẹt không bị chốt.
+TEST(output_classes_failsafe_and_stall_policy_differ) {
+    Plant plant;
+    Servo motor(plant, nullptr, 0, 2);   // actuator, thread riêng 2 ms
+    struct Beacon final : public svc::Output<RelayCmd> {   // indicator, thread riêng 2 ms
+        Beacon() : Output("beacon", Config{2, 0, 0, nullptr, svc::OutputClass::Indicator}) {}
+        std::atomic<bool> lit{false}, hang{false};
+        void on_update(const RelayCmd& c, std::uint64_t) override {
+            while (hang.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            lit = c.on;
+        }
+        void write_safe() override { lit = false; }
+    } beacon;
+    svc::OutputHub hub;
+    hub.add(&motor, {"motor", osal::Priority::High, 2048, nullptr});
+    hub.add(&beacon, {"beacon", osal::Priority::Low, 2048, nullptr});
+    CHECK(core::is_ok(hub.start(nullptr, {"out_sup", osal::Priority::Realtime, 1024, nullptr}, 2)));
+    CHECK(hub.supervising());                       // có actuator: cần giám sát
+
+    CHECK(beacon.command({true}) == core::Status::Ok);   // indicator: không cần arm
+    CHECK(motor.command({10.0f}) == core::Status::Busy); // actuator: phải arm
+    motor.arm();
+    motor.command({10.0f});
+    CHECK(wait_until([&] { return beacon.lit.load() && motor.drive.load() != 0.0f; }));
+
+    hub.disarm_all();                               // failsafe
+    CHECK(motor.drive.load() == 0.0f && motor.reason() == svc::SafeReason::NotArmed);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    CHECK(beacon.lit.load() && beacon.reason() == svc::SafeReason::None);   // chỉ báo vẫn sáng
+
+    beacon.hang = true;                             // thread của indicator kẹt quá ngưỡng (20 ms)
+    std::this_thread::sleep_for(std::chrono::milliseconds(80));
+    CHECK(beacon.reason() == svc::SafeReason::None);   // không bị chốt
+    beacon.hang = false;
+    CHECK(beacon.command({true}) == core::Status::Ok);
+    hub.stop();
+    CHECK(!beacon.lit.load() && motor.drive.load() == 0.0f);
 }

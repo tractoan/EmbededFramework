@@ -161,7 +161,7 @@ void AlarmController::st_fault(Signal sig, const msg::Event* e) {
 
 // ---------------------------------------------------------------------- CLI
 // Chạy trên thread CLI: KHÔNG chạm vào FSM trực tiếp -> gửi yêu cầu qua event.
-int AlarmController::on_command(int argc, char** argv, svc::CommandOutput& out) {
+int AlarmController::on_command(int argc, char** argv, svc::CommandReply& out) {
     if (argc >= 2 && std::strcmp(argv[1], "ack") == 0) {
         ctx_->bus.publish(msg::Event::make(events::kAlarmAckRequest));
         out.print("ack requested\r\n");

@@ -11,9 +11,9 @@ namespace svc {
 
 // Kênh xuất kết quả lệnh. Mỗi giao thức/kênh tự hiện thực write()
 // (UART qua CliProtocol, Telnet, BLE, bộ đệm khi test...).
-class CommandOutput {
+class CommandReply {
 public:
-    virtual ~CommandOutput() = default;
+    virtual ~CommandReply() = default;
     void print(const char* fmt, ...) EP_PRINTF_FMT(2, 3);
     virtual void write(const char* text, std::size_t len) = 0;
 };
@@ -22,7 +22,7 @@ class ICommandHandler {
 public:
     virtual ~ICommandHandler() = default;
     // argv[0] là tên lệnh. Trả 0 nếu thành công.
-    virtual int on_command(int argc, char** argv, CommandOutput& out) = 0;
+    virtual int on_command(int argc, char** argv, CommandReply& out) = 0;
 };
 
 struct Command {
@@ -40,12 +40,12 @@ public:
     core::Status register_command(const Command& cmd);
 
     // Tách tham số (in-place) và thực thi một dòng lệnh.
-    int execute(char* line, CommandOutput& out);
+    int execute(char* line, CommandReply& out);
     std::size_t count() const;
 
 private:
     bool find(const char* name, Command& out) const;
-    void print_help(CommandOutput& out) const;
+    void print_help(CommandReply& out) const;
 
     std::array<Command, core::cfg::kMaxCommands> cmds_{};
     std::size_t count_ = 0;

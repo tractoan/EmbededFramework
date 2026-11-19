@@ -21,7 +21,7 @@ public:
     bool probe(const std::uint8_t* data, std::size_t len) const override;
 
 private:
-    class StreamOutput final : public svc::CommandOutput {
+    class StreamOutput final : public svc::CommandReply {
     public:
         void bind(IByteStream* io) { io_ = io; }
         void write(const char* text, std::size_t len) override {

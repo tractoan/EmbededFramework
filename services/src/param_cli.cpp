@@ -5,7 +5,7 @@
 
 namespace svc {
 
-int ParamCli::on_command(int argc, char** argv, CommandOutput& out) {
+int ParamCli::on_command(int argc, char** argv, CommandReply& out) {
     if (store_ == nullptr) return -1;
     const char* sub = argc >= 2 ? argv[1] : "list";
 

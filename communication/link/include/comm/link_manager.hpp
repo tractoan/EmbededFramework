@@ -38,7 +38,7 @@ public:
     ProtocolId setting(std::size_t ch) const;
 
     void on_event(const msg::Event& e) override;
-    int on_command(int argc, char** argv, svc::CommandOutput& out) override;   // "link"
+    int on_command(int argc, char** argv, svc::CommandReply& out) override;   // "link"
 
 private:
     class Channel : core::NonCopyable {
