@@ -115,18 +115,23 @@ Phân lớp (service = cơ chế, business = chính sách):
 
 | Lớp | Thành phần | Việc |
 |---|---|---|
-| device | `device::NmeaParser` | ghép câu, kiểm checksum, giải mã GGA/RMC – hàm thuần |
+| device | `device::NmeaParser` + `device::NmeaFixParser` | ghép câu, kiểm checksum, giải mã GGA/RMC; gom một fix mỗi epoch – hàm thuần |
 | service | `svc::GnssReceiver : IGnssReceiver` (thread `gnss`) | dùng cổng Stream của `ISerialPorts`; rút byte, giải mã, gom fix (`latest_fix()` + số thứ tự), bản sao byte thô (`read_raw()`), hàng đợi lệnh/đổi baud (`send()`), thống kê |
 | business | `app::GnssBringup` | luật `gnss.detect_ms`: không có byte -> dừng receiver, chuyển cổng sang loopback; phát `kGnssFix` khi số thứ tự fix đổi, chuyển tiếp thô nếu `gnss.forward`, chỉ nhận lệnh khi CONNECTED, `BringupStatus`, lệnh CLI `gnss` |
 
-Sản phẩm/dự án khác cần vị trí GNSS dùng thẳng `svc::GnssReceiver` (không cần module bring-up).
+Sản phẩm/dự án khác cần vị trí GNSS:
+- chỉ đọc (drone, logger…): dùng như một cảm biến – `svc::StreamSensorTask<device::NmeaFixParser, device::GnssFix>`
+  trong một nhóm `SensorScheduler` riêng → `msg::Topic<GnssFix>`, có sức khỏe `kSensorFault`/`kSensorRecovered`;
+- cần gửi lệnh cấu hình / byte thô / cổng dùng chung với `SerialPortBank`: dùng `svc::GnssReceiver` (không cần module bring-up).
+Hai cách dùng chung một bộ gom fix (`NmeaFixParser`).
 
 `device::NmeaParser` (`platform/device/src/nmea.cpp`, hàm thuần, số nguyên – không cần FPU) nhận từng byte từ cổng
 máy thu, ghép câu `$...*hh`, **bắt buộc đúng checksum**, giải mã **GGA** (giờ, lat/lon, chất lượng fix, số vệ tinh,
 HDOP, độ cao) và **RMC** (giờ, ngày, lat/lon, tốc độ, hướng) của mọi talker (`GP`, `GN`, `GL`, `GA`, `GB`/`BD`).
 Các câu khác bị bỏ qua; dữ liệu nhị phân (UBX…) xen giữa không làm hỏng câu sau.
 
-- Một `GNSS_FIX` + `GPS_RAW_INT` sau mỗi câu GGA (ngày lấy từ RMC gần nhất). Máy thu chỉ phát RMC → gửi sau mỗi RMC.
+- Một `GNSS_FIX` + `GPS_RAW_INT` sau mỗi câu GGA (ngày lấy từ RMC gần nhất). Máy thu chỉ phát RMC → gửi sau mỗi RMC
+  (GGA bị tắt giữa chừng: chậm một epoch rồi theo RMC).
 - `time_unix_usec` = ngày + giờ UTC (0 tới khi đã nhận RMC có ngày). Cờ `flags`: 1 giờ, 2 ngày, 4 vị trí, 8 độ cao hợp lệ.
 - Giải mã luôn chạy khi máy thu CONNECTED, độc lập với việc chuyển tiếp dữ liệu thô (`gnss.forward`).
 - Xem trên console: `gnss` (số fix, lỗi checksum, giờ UTC, lat/lon); trên PC: `tools/mavlink/bringup_gcs.py gnss-fix`.

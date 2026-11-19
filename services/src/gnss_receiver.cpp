@@ -72,17 +72,6 @@ GnssStats GnssReceiver::stats() const {
     return s;
 }
 
-void GnssReceiver::on_sentence(const device::GnssFix& fix, device::NmeaParser::Result kind, std::uint64_t now_ms) {
-    if (kind == device::NmeaParser::Result::Gga) {
-        last_gga_ms_ = now_ms;
-    } else if (last_gga_ms_ != 0 && now_ms < last_gga_ms_ + kRmcOnlyMs) {
-        return;   // có GGA đều đặn: RMC chỉ cập nhật ngày/tốc độ, fix gom theo GGA
-    }
-    osal::LockGuard g(fix_mtx_);
-    fix_ = fix;
-    ++fix_seq_;
-}
-
 void GnssReceiver::process(std::uint32_t wait_ms, std::uint64_t now_ms) {
     TxJob job;
     if (tx_.receive(job, wait_ms)) {   // chờ lệnh = nhịp nghỉ của vòng lặp
@@ -100,7 +89,14 @@ void GnssReceiver::process(std::uint32_t wait_ms, std::uint64_t now_ms) {
         if (n == 0) break;
         rx_bytes_.fetch_add(static_cast<std::uint32_t>(n));
         last_rx_ms_ = now_ms;
-        parser_.feed(buf, n, [&](const device::GnssFix& f, device::NmeaParser::Result r) { on_sentence(f, r, now_ms); });
+        for (std::size_t i = 0; i < n; ++i) {
+            device::GnssFix f;
+            if (parser_.feed(buf[i], f)) {
+                osal::LockGuard g(fix_mtx_);
+                fix_ = f;
+                ++fix_seq_;
+            }
+        }
         if (tap_) {
             for (std::size_t i = 0; i < n; ++i) {
                 if (!raw_.push(buf[i])) {
@@ -110,8 +106,8 @@ void GnssReceiver::process(std::uint32_t wait_ms, std::uint64_t now_ms) {
             }
         }
     }
-    sentences_       = parser_.sentences();
-    checksum_errors_ = parser_.checksum_errors();
+    sentences_       = parser_.nmea().sentences();
+    checksum_errors_ = parser_.nmea().checksum_errors();
 }
 
 void GnssReceiver::run() {

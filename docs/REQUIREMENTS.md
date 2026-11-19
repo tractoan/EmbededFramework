@@ -7,7 +7,7 @@
 |---|---|
 | Phiên bản tài liệu | 1.5 |
 | Ứng với code | `main` @ `75ae991` (sau PR #11); bổ sung của nhánh `claude/vibrant-dirac-qrpici` (sản phẩm `hw_bringup`, xem §23) |
-| Số test tự động | 125 test case (`tests/`) – 123 chạy trên host Linux (102 của `main` + 21 của nhánh `hw_bringup`); target QNX chạy 124 (thêm 2 test riêng QNX, không có test riêng Linux) |
+| Số test tự động | 127 test case (`tests/`) – 125 chạy trên host Linux (102 của `main` + 23 của nhánh `hw_bringup`); target QNX chạy 126 (thêm 2 test riêng QNX, không có test riêng Linux) |
 
 ---
 
@@ -122,6 +122,7 @@ thành `DROP` và ghi lý do. Yêu cầu tách đôi thì giữ mã cũ cho ph�
 | SRC-23 | Phân rõ service (cơ chế dùng chung) và business (chính sách); GNSS thành service; định nghĩa bản tin dialect MAVLink vào `communication/` |
 | SRC-24 | Build được với header kernel Linux cũ (< 5.10, không có GPIO uAPI v2) |
 | SRC-25 | DO của `hw_bringup` dùng cơ chế output của framework (`Output` loại Actuator): an toàn lúc khởi động/tắt, arm/disarm từ giao diện, deadman tùy chọn |
+| SRC-26 | GNSS dùng được như một cảm biến của `SensorScheduler` (chỉ đọc); `GnssReceiver` giữ cho trường hợp cần gửi lệnh / byte thô / cổng dùng chung; hai nơi cùng một bộ gom fix |
 
 | Mã | Quyết định thiết kế rút ra từ thảo luận |
 |---|---|
@@ -232,6 +233,7 @@ Macro cấu hình hiện có (mặc định): `EP_CFG_MAX_EVENT_SUBSCRIBERS` 16 
 | DEV-005 | Giải mã khung IMU theo bảng `ImuFormat` (offset, độ rộng, endian, LSB, gia số/tốc độ, byte nhận dạng, checksum Sum16/NegSum16/CRC X.25); định dạng tham khảo `ln200`, `hg1700` | SRC-21 | `platform/device/include/device/imu.hpp`, `src/imu_format.cpp` | `imu_decode_formats` (khung mẫu tự dựng – **chưa đối chiếu ICD**, DEF-016) | `VER` |
 | DEV-006 | Driver `HdlcImu` không thread: `read(sample, timeout)` chờ một khung hợp lệ (FCS phần cứng hoặc phần mềm), bỏ khung lỗi, thống kê khung/lỗi/tần số; dùng với `BlockingSensorTask` | SRC-21, DD-05 | `platform/device/include/device/hdlc_imu.hpp` | `hdlc_imu_driver_counters_and_software_fcs`, `hdlc_imu_blocking_read_with_sensor_scheduler` | `VER` |
 | DEV-007 | Bộ giải mã NMEA 0183 (`NmeaParser`): nhận từng byte, bắt buộc checksum, GGA + RMC mọi talker, số nguyên (lat/lon 1e-7 độ, giờ ms, ngày, thời gian UNIX), chịu rác nhị phân / câu quá dài | SRC-22 | `platform/device/include/device/nmea.hpp` | `nmea_gga_rmc_reference_sentences`, `nmea_hemispheres_talkers_and_invalid_fix`, `nmea_robustness` | `VER` |
+| DEV-008 | `NmeaFixParser`: gom câu NMEA thành **một fix mỗi epoch** – Parser của `StreamSensorTask` (`bool feed(byte, GnssFix&)`); GGA ra fix, RMC chỉ ra fix khi không có GGA (chưa thấy GGA, hoặc ≥ 2 RMC từ GGA cuối) – không cần đồng hồ; `GnssFix` là kiểu trivial (đi qua `Topic`) | SRC-26, SNS-004 | `platform/device/include/device/nmea.hpp` | `nmea_fix_parser_one_fix_per_epoch`, `nmea_fix_parser_as_stream_sensor_task` | `VER` |
 
 ## 9. Mạng TCP/IP – NET
 
@@ -270,7 +272,7 @@ Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamCha
 | SVC-006 | `LedService`: mặt tiền cho nghiệp vụ (`set/get` theo `LedId`, mẫu Off/On/BlinkSlow/BlinkFast/Heartbeat); bên dưới là **một** `LedOutput` loại Indicator, thread 50 ms cho mọi LED; nghiệp vụ không biết chân GPIO | SRC-01, SRC-18 | `services/src/led_service.cpp` | `test_led_output.cpp` (3 test); firmware QNX-shim/Nios-shim (đếm cạnh thanh ghi) | `VER` |
 | SVC-007 | Lệnh `sys info / modules / sensors / outputs / tasks / buffers / log / reboot / quit` | SRC-01 | `app/runtime/src/system.cpp` | Firmware mô phỏng | `IMP` |
 | SVC-008 | `SerialPortBank` (`ISerialPorts`): mỗi cổng một thread, chế độ đổi lúc chạy Off / Loopback (khung thử 18 B có seq + CRC; PASS/TIMEOUT/MISMATCH/OPEN-ERR; nối chéo cặp cổng) / Stream (ring buffer, ghi từ thread khác, đổi baud) / External; priority/stack theo cổng | SRC-21 | `services/include/services/serial_port_bank.hpp` | `serial_bank_loopback_stream_and_pairs`, `serial_bank_cross_pair_pass` | `VER` |
-| SVC-009 | `GnssReceiver` (`IGnssReceiver`): thread riêng trên cổng Stream; giải mã NMEA, gom một fix mỗi GGA (RMC nếu không có GGA 2 s) với số thứ tự, tap byte thô, hàng đợi lệnh + đổi baud không chặn, thống kê; không có khái niệm bring-up | SRC-22, SRC-23, DD-03 | `services/include/services/gnss_receiver.hpp` | `gnss_receiver_service_parses_taps_and_sends` | `VER` |
+| SVC-009 | `GnssReceiver` (`IGnssReceiver`): thread riêng trên cổng Stream; giải mã NMEA, gom một fix mỗi epoch bằng `device::NmeaFixParser` (DEV-008, cùng luật với `StreamSensorTask`) với số thứ tự, tap byte thô, hàng đợi lệnh + đổi baud không chặn, thống kê; không có khái niệm bring-up | SRC-22, SRC-23, SRC-26, DD-03 | `services/include/services/gnss_receiver.hpp` | `gnss_receiver_service_parses_taps_and_sends` | `VER` |
 | SVC-010 | `DigitalOutputs`: nhóm cổng số ra (`device::IDigitalOutputs`) là **một** `Output<{mask, value}>` loại Actuator, chế độ trực tiếp; an toàn = tắt mọi kênh (khởi động, disarm/failsafe, deadman, tắt máy); chưa arm → `Busy`; `set()` từ chối kênh không tồn tại (`InvalidArg`), đếm lỗi ghi | SRC-25, DD-06, ACT-003 | `services/include/services/digital_outputs.hpp` | `digital_outputs_is_a_safe_actuator` | `VER` |
 
 ## 12. Lấy mẫu cảm biến – SNS
@@ -426,7 +428,7 @@ Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamCha
 | Mã | Nội dung | Liên quan | Trạng thái |
 |---|---|---|---|
 | PLN-001 | HAL: `IPwm` / output timer (DShot), `ISpi`, `IAdc`, encoder / timer capture (+ bản mô phỏng) | SRC-15, drone | `PLN` |
-| PLN-002 | Parser thật cho `StreamSensorTask`: NMEA, UBX (GNSS), SBUS/CRSF (máy thu RC) – NMEA đã có (`device::NmeaParser`, DEV-007, dùng qua `GnssReceiver`; chưa có adapter `feed(byte, Sample&)`); còn UBX, SBUS/CRSF | SNS-004, DEV-007 | `PLN` |
+| PLN-002 | Parser thật cho `StreamSensorTask`: NMEA, UBX (GNSS), SBUS/CRSF (máy thu RC) – NMEA **đã có** (`device::NmeaFixParser`, DEV-008; `GnssReceiver` dùng cùng bộ gom); còn UBX, SBUS/CRSF | SNS-004, DEV-007, DEV-008 | `PLN` |
 | PLN-003 | Kích hoạt theo mẫu mới: `Topic` có thông báo (semaphore) để vòng điều khiển chạy ngay khi có mẫu IMU | MSG-005, drone | `PLN` |
 | PLN-004 | Output: gom nhiều output dùng chung một thread (khi ≥ 3 output có thread cùng nhịp, RAM eo hẹp) | DD-07 | `PLN` |
 | PLN-005 | Output: phân xử nhiều nguồn lệnh theo priority (failsafe > tay > tự động), giới hạn/ramp | ACT | `PLN` |
@@ -470,6 +472,7 @@ Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamCha
 | `test_utils.cpp` (nhánh hw_bringup) | `utils_crc_known_vectors` (thêm X-25) | UTIL-004 |
 | `test_mavlink2.cpp` | `mavlink_encode_matches_pymavlink`, `mavlink_parser_resync_and_errors`, `mavlink_protocol_params_commands_and_events`, `mavlink_auto_detect_on_link` | COMM-008 |
 | `test_nmea.cpp` | `nmea_gga_rmc_reference_sentences`, `nmea_hemispheres_talkers_and_invalid_fix`, `nmea_robustness` | DEV-007 |
+| | `nmea_fix_parser_one_fix_per_epoch`, `nmea_fix_parser_as_stream_sensor_task` | DEV-008, SNS-004 |
 | `test_bringup_services.cpp` | `serial_bank_loopback_stream_and_pairs`, `serial_bank_cross_pair_pass` | SVC-008 |
 | | `imu_decode_formats`, `hdlc_imu_driver_counters_and_software_fcs`, `hdlc_imu_blocking_read_with_sensor_scheduler` | DEV-005, DEV-006, HAL-017, SNS-003 |
 | | `digital_io_banks` | DEV-004 |
@@ -506,4 +509,4 @@ Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamCha
 | [#9](https://github.com/tractoan/EmbededFramework/pull/9) | Hỗ trợ Intel Nios II + uC/OS-II; sửa vùng găng port uC/OS-II | SRC-17, OSAL-007, HAL-012…016, TGT-006/007 |
 | [#10](https://github.com/tractoan/EmbededFramework/pull/10) | Gộp output: `Actuator` → `Output`, `OutputClass` Actuator/Indicator, LED là output, giám sát chỉ khi cần; `CommandOutput` → `CommandReply` | SRC-18, DD-08, ACT-001…014, SVC-003/006/007, APP-007 |
 | [#11](https://github.com/tractoan/EmbededFramework/pull/11) | Cấu hình cảm biến áp dụng ngay: khóa thiết bị theo task, `SensorConfigurator`, chờ theo lát cho task chặn, đổi chu kỳ ngay, settling; `kParamsLoaded`; `SensorParamBinding`; cấu hình TMP102; tùy chọn chờ nhịp `ApplyMode::NextSample` | SRC-19/20, DD-09/10, SNS-011…021, DEV-003, SVC-001 |
-| nhánh `claude/vibrant-dirac-qrpici` (chưa merge) | Sản phẩm `hw_bringup`: HAL mảng + HDLC, port/target `linux_cpu`, GPIO v1/v2, MAVLink v2 + dialect, `SerialPortBank`, `GnssReceiver` + NMEA, IMU qua `SensorScheduler`, DO qua `svc::DigitalOutputs` (Output loại Actuator); sửa DEF-012…015 | HAL-017…020, DEV-004…007, SVC-008…010, COMM-008/009, UTIL-004, TGT-008, PROD-005…007, VER-013/014 |
+| nhánh `claude/vibrant-dirac-qrpici` (chưa merge) | Sản phẩm `hw_bringup`: HAL mảng + HDLC, port/target `linux_cpu`, GPIO v1/v2, MAVLink v2 + dialect, `SerialPortBank`, `GnssReceiver` + NMEA (`NmeaFixParser` dùng được với `StreamSensorTask`), IMU qua `SensorScheduler`, DO qua `svc::DigitalOutputs` (Output loại Actuator); sửa DEF-012…015 | HAL-017…020, DEV-004…008, SVC-008…010, COMM-008/009, UTIL-004, TGT-008, PROD-005…007, VER-013/014 |

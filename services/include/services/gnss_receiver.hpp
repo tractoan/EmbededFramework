@@ -1,7 +1,7 @@
 #pragma once
 // Dịch vụ máy thu GNSS trên một cổng serial (chế độ Stream của ISerialPorts). Thread riêng:
 //   - rút byte máy thu từ cổng, giải mã NMEA (device::NmeaParser), gom thành từng fix: một fix mỗi câu
-//     GGA (ngày lấy từ RMC gần nhất); máy thu chỉ phát RMC (không GGA trong 2 s) -> một fix mỗi RMC
+//     GGA (ngày lấy từ RMC gần nhất); máy thu chỉ phát RMC -> một fix mỗi RMC (luật device::NmeaFixParser)
 //   - bản sao byte thô (tap) cho ai cần chuyển tiếp, nếu bật
 //   - gửi lệnh tới máy thu / đổi baudrate qua hàng đợi (ghi UART có thể chặn – không chặn người gọi)
 // Chỉ là CƠ CHẾ: không có khái niệm thời gian chờ phát hiện, loopback, giao diện... (đó là nghiệp vụ).
@@ -56,7 +56,6 @@ class GnssReceiver final : public IGnssReceiver, private core::NonCopyable {
 public:
     static constexpr std::size_t kTxQueue    = 8;
     static constexpr std::size_t kRawTap     = 4096;
-    static constexpr std::uint32_t kRmcOnlyMs = 2000;   // không thấy GGA lâu hơn -> gom fix theo RMC
 
     struct Config {
         ISerialPorts* ports     = nullptr;
@@ -85,15 +84,13 @@ private:
         std::uint32_t baudrate = 0;
     };
     void run();
-    void on_sentence(const device::GnssFix& fix, device::NmeaParser::Result kind, std::uint64_t now_ms);
 
     Config cfg_{};
     osal::Thread thread_;
     std::atomic<bool> running_{false};
     std::atomic<bool> tap_{false};
 
-    device::NmeaParser parser_;   // chỉ thread dịch vụ
-    std::uint64_t last_gga_ms_ = 0;
+    device::NmeaFixParser parser_;   // chỉ thread dịch vụ; gom một fix mỗi epoch (cùng luật với StreamSensorTask)
 
     mutable osal::Mutex fix_mtx_;
     device::GnssFix fix_{};

@@ -109,3 +109,77 @@ TEST(nmea_robustness) {
     std::uint8_t m = 0, d = 0;
     CHECK(!device::nmea::parse_date("321399", y, m, d));
 }
+
+// ---- NmeaFixParser: một fix mỗi epoch; dùng làm Parser của svc::StreamSensorTask
+#include "messaging/topic.hpp"
+#include "services/sensor_scheduler.hpp"
+
+namespace {
+int fixes_from(device::NmeaFixParser& p, const std::string& s, F* last = nullptr) {
+    int n = 0;
+    for (char c : s) {
+        F f;
+        if (p.feed(static_cast<std::uint8_t>(c), f)) {
+            ++n;
+            if (last != nullptr) *last = f;
+        }
+    }
+    return n;
+}
+const std::string kGga = sentence("GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,");
+const std::string kRmc = sentence("GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W");
+const std::string kGsv = sentence("GPGSV,1,1,00");
+
+// UART giả không chờ: trả byte đang có, hết thì trả 0 ngay.
+class QueueUart final : public hal::IUart {
+public:
+    core::Status open(const hal::UartConfig&) override { return core::Status::Ok; }
+    void close() override {}
+    std::size_t write(const std::uint8_t*, std::size_t len, std::uint32_t) override { return len; }
+    std::size_t read(std::uint8_t* data, std::size_t len, std::uint32_t) override {
+        std::size_t n = 0;
+        while (n < len && pos < q.size()) data[n++] = static_cast<std::uint8_t>(q[pos++]);
+        return n;
+    }
+    std::string q;
+    std::size_t pos = 0;
+};
+std::uint64_t g_ms = 0;
+std::uint64_t clock_ms() { return g_ms; }
+}  // namespace
+
+TEST(nmea_fix_parser_one_fix_per_epoch) {
+    device::NmeaFixParser p;
+    F f;
+    CHECK_EQ(fixes_from(p, kRmc, &f), 1);                   // chưa từng thấy GGA: RMC ra fix
+    CHECK((f.flags & F::kDateValid) && f.year == 1994);
+    CHECK_EQ(fixes_from(p, kGga, &f), 1);                   // GGA kết thúc epoch, giữ ngày từ RMC
+    CHECK(f.alt_mm == 545400 && f.year == 1994 && f.satellites == 8);
+    CHECK_EQ(fixes_from(p, kRmc + kGsv + kGga + kRmc + kGga), 2);   // máy thu phát cả hai: chỉ theo GGA
+    CHECK_EQ(fixes_from(p, kRmc), 0);                       // GGA bị tắt: chậm một epoch...
+    CHECK_EQ(fixes_from(p, kRmc + kRmc), 2);                // ...rồi mỗi RMC một fix
+    CHECK_EQ(fixes_from(p, kGga + kRmc), 1);                // GGA quay lại: lại theo GGA
+    CHECK(p.last_result() == R::Rmc && p.nmea().sentences() == 12 && p.fixes() == 7);
+    CHECK_EQ(fixes_from(p, "$GPGGA,bad*00\r\n"), 0);
+    CHECK(p.last_result() == R::ChecksumError);
+    p.reset();
+    CHECK_EQ(fixes_from(p, kRmc), 1);                       // reset: lại như chưa thấy GGA
+}
+
+TEST(nmea_fix_parser_as_stream_sensor_task) {
+    QueueUart uart;
+    device::NmeaFixParser nmea;
+    msg::Topic<F> topic;
+    svc::StreamSensorTask<device::NmeaFixParser, F> task("gnss", uart, nmea, topic, 1000);
+    g_ms = 100;
+    uart.q = kGga.substr(0, 20);                            // câu bị cắt giữa hai lần đọc
+    CHECK(task.sample(&clock_ms) == core::Status::Timeout);
+    uart.q += kGga.substr(20) + kRmc + kGga;
+    F f;
+    msg::TopicStamp st;
+    CHECK(core::is_ok(task.sample(&clock_ms)));             // dừng ở fix đầu tiên
+    CHECK(core::is_ok(topic.read(f, &st)) && st.sequence == 1 && f.lat_e7 == 481173000 && f.quality == 1);
+    CHECK(core::is_ok(task.sample(&clock_ms)));             // phần còn lại (RMC + GGA) -> một fix
+    CHECK(core::is_ok(topic.read(f, &st)) && st.sequence == 2 && f.year == 1994);
+    CHECK(task.sample(&clock_ms) == core::Status::Timeout);   // hết dữ liệu: lỗi -> sức khỏe của scheduler
+}

@@ -135,10 +135,37 @@ bool parse_coord(const char* s, const char* hemi, bool is_lat, std::int32_t& e7)
 
 }  // namespace nmea
 
+bool NmeaFixParser::feed(std::uint8_t byte, GnssFix& out) {
+    const NmeaParser::Result r = p_.feed(static_cast<char>(byte));
+    if (r == NmeaParser::Result::None) return false;
+    last_     = r;
+    bool emit = false;
+    if (r == NmeaParser::Result::Gga) {
+        seen_gga_      = true;
+        rmc_since_gga_ = 0;
+        emit           = true;
+    } else if (r == NmeaParser::Result::Rmc) {
+        if (rmc_since_gga_ < 255) ++rmc_since_gga_;
+        emit = !seen_gga_ || rmc_since_gga_ >= 2;
+    }
+    if (emit) {
+        out = p_.fix();
+        ++fixes_;
+    }
+    return emit;
+}
+
+void NmeaFixParser::reset() {
+    p_.reset();
+    last_          = NmeaParser::Result::None;
+    seen_gga_      = false;
+    rmc_since_gga_ = 0;
+}
+
 void NmeaParser::reset() {
     len_         = 0;
     in_sentence_ = false;
-    fix_         = GnssFix{};
+    fix_         = GnssFix::empty();
 }
 
 NmeaParser::Result NmeaParser::feed(char c) {
