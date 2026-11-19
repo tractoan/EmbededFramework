@@ -294,7 +294,7 @@ Nhóm định kỳ theo **bus và nhịp**, không theo loại cảm biến: tas
 chậm đặt chung nhóm với IMU 1 kHz sẽ làm trễ IMU. Lịch định kỳ theo đồng hồ OSAL (1 ms); nhanh hơn 1 kHz hoặc
 jitter dưới 1 ms: dùng task **chặn** chờ ngắt DRDY.
 
-#### Cấu hình cảm biến: áp dụng **ngay**, không chờ nhịp lấy mẫu
+#### Cấu hình cảm biến: áp dụng **ngay** hoặc **chờ nhịp** lấy mẫu
 
 ```cpp
 static device::Tmp102 tmp102;                // tmp102.init(&i2c, 0x48) trong setup()
@@ -304,16 +304,33 @@ static svc::SensorConfigurator<device::Tmp102, device::Tmp102Config, &device::Tm
 
 device::Tmp102Config c;  c.rate = device::Tmp102Config::Rate::Hz8;  c.extended = true;
 core::Status st = tmp_cfg.configure(c);   // ghi chip NGAY trên thread gọi, trả kết quả đồng bộ
+tmp_cfg.configure(c, svc::ApplyMode::NextSample);   // hoặc: chỉ gửi yêu cầu, luồng lấy mẫu ghi ở nhịp kế tiếp
 temp.set_period_ms(125);                  // lịch mới có hiệu lực ngay (đánh thức scheduler)
 ```
 
 | Thành phần | Trách nhiệm |
 |---|---|
 | `SensorTaskBase` | Khóa thiết bị **theo task**: lấy mẫu và cấu hình không bao giờ chạm chip cùng lúc; `set_period_ms()` đổi chu kỳ ngay; `discard_next(n)` bỏ n mẫu sau khi đổi cấu hình (settling) |
-| `SensorConfigurator<Device, Config, &Device::apply>` | `configure(cfg)`: chờ khóa tối đa `lock_timeout_ms` (mặc định 50 ms) → `apply()` → lưu cấu hình hiện hành, bỏ `settle_samples` mẫu kế tiếp; hết thời gian chờ → `Busy` (đếm `failures()`) |
-| `SensorParamBinding<Configurator, Config>` | Listener EventBus: `kParamsLoaded` (sau khi nạp NV) và `kParamChanged` trong dải `[first, last]` → `configure(build(params))` ngay trên thread vừa đổi tham số (CLI / Modbus / MAVLink) |
+| `ApplyMode` | `Immediate` (mặc định) / `NextSample` – xem bảng dưới |
+| `SensorConfigurator<Device, Config, &Device::apply>` | `configure(cfg[, mode])`. Immediate: chờ khóa tối đa `lock_timeout_ms` (mặc định 50 ms) → `apply()` → lưu cấu hình hiện hành, bỏ `settle_samples` mẫu kế tiếp; hết thời gian chờ → `Busy` (đếm `failures()`). NextSample: trả `Ok` = đã nhận; kết quả ghi ở `last_status()`, `pending()` |
+| `SensorParamBinding<Configurator, Config>` | Listener EventBus: `kParamsLoaded` (sau khi nạp NV) và `kParamChanged` trong dải `[first, last]` → `configure(build(params), mode)` trên thread vừa đổi tham số (CLI / Modbus / MAVLink); `mode` là tham số cuối của constructor |
 | `SensorPeriodBinding` | Chu kỳ lấy mẫu (task chặn: timeout) theo một tham số |
 | `ParamStore` → `kParamsLoaded` | `load()` đặt giá trị **im lặng** (không phát `kParamChanged`), nên phát một sự kiện "đã nạp" để binding áp dụng giá trị đã lưu |
+
+| | `Immediate` (mặc định) | `NextSample` |
+|---|---|---|
+| Ai ghi thiết bị | Thread gọi `configure()` | Luồng lấy mẫu, đầu lần lấy mẫu kế tiếp, **trước** lần đọc |
+| Người gọi | Chờ khóa thiết bị (≤ `lock_timeout_ms`) + thời gian ghi | Trả ngay, không chặn, không tranh khóa |
+| Trả về | Kết quả ghi (`Ok` / lỗi bus / `Busy`) | `Ok` = đã nhận (`Busy` nếu task đã có bộ cấu hình chờ nhịp khác); kết quả ghi: `last_status()` |
+| Có hiệu lực | Ngay khi hàm trả về | Nhịp kế tiếp: task định kỳ ≤ 1 chu kỳ; task chặn ở lần `sample()` kế tiếp (khi có dữ liệu hoặc hết timeout – **không** phải lát 10 ms) |
+| Nhiều yêu cầu | Ghi lần lượt | Gộp: chỉ yêu cầu mới nhất được ghi |
+| Trước khi scheduler chạy | Ghi ngay | Ghi ở mẫu đầu tiên |
+| Khi nào dùng | Cần biết kết quả ngay (lệnh CLI, bước kiểm tra), đổi dải đo trước khi đọc tiếp | Listener EventBus, vòng điều khiển / thread priority cao không được chặn, cấu hình phải rơi đúng ranh giới giữa hai mẫu |
+
+Trộn hai cách: yêu cầu sau thắng – `Immediate` thành công hủy `NextSample` gửi **trước** nó; `NextSample` gửi sau
+(kể cả trong lúc `Immediate` đang chờ khóa) vẫn được ghi ở nhịp kế tiếp. Ghi lỗi ở nhịp: báo một lần qua
+`last_status()` / `failures()`, không thử lại mãi, cấu hình hiện hành giữ nguyên. Mỗi task một bộ cấu hình
+chờ nhịp; `Immediate` thì bộ nào cũng dùng được.
 
 Vì sao "ngay" mà vẫn an toàn:
 
@@ -328,8 +345,9 @@ Vì sao "ngay" mà vẫn an toàn:
 - **Settling**: mẫu đọc ngay sau khi đổi dải/tốc độ có thể sai → `settle_samples` mẫu kế tiếp bị bỏ, không publish.
 - Đổi chu kỳ: lần lấy mẫu kế tiếp = lần trước + chu kỳ **mới** (không chờ hết lượt ngủ theo chu kỳ cũ).
 
-`SensorParamBinding` là ngoại lệ **có giới hạn** của quy tắc "listener không chặn": nó chờ khóa thiết bị tối đa
-`lock_timeout_ms` + thời gian ghi cấu hình. Chỉ nối cảm biến có `apply()` ngắn (vài thanh ghi I2C/SPI).
+`SensorParamBinding` ở chế độ `Immediate` là ngoại lệ **có giới hạn** của quy tắc "listener không chặn": nó chờ
+khóa thiết bị tối đa `lock_timeout_ms` + thời gian ghi cấu hình – chỉ nối cảm biến có `apply()` ngắn (vài thanh
+ghi I2C/SPI). Ở chế độ `NextSample` listener không chặn (đo: 0 ms khi thiết bị đang bận một lần đọc 200 ms).
 `device::Tmp102::apply(Tmp102Config)` là ví dụ: tốc độ chuyển đổi (CR), chế độ 13-bit mở rộng (EM, tới
 150 °C), shutdown (SD) – read-modify-write thanh ghi cấu hình, giữ nguyên các bit cảnh báo.
 

@@ -2,9 +2,12 @@
 // Nối tham số (ParamStore) -> cấu hình cảm biến, áp dụng NGAY:
 //   - kParamsLoaded (sau khi nạp NV lúc khởi động): áp dụng giá trị đã lưu;
 //   - kParamChanged trong dải [first, last] (CLI / Modbus / MAVLink / nghiệp vụ đổi tham số): áp dụng lại.
-// Là listener TRỰC TIẾP của EventBus -> chạy trên thread vừa đổi tham số, không qua hàng đợi, không chờ nhịp
-// lấy mẫu. configure() chờ khóa thiết bị tối đa lock_timeout_ms của SensorConfigurator (một lần đọc / một lát
-// chờ của task chặn) + thời gian ghi cấu hình – giới hạn, nhưng là ngoại lệ của quy tắc "listener không chặn".
+// Là listener TRỰC TIẾP của EventBus -> chạy trên thread vừa đổi tham số, không qua hàng đợi.
+//   ApplyMode::Immediate (mặc định): ghi thiết bị ngay – configure() chờ khóa thiết bị tối đa lock_timeout_ms
+//     (một lần đọc / một lát chờ của task chặn) + thời gian ghi; giới hạn, nhưng là ngoại lệ của quy tắc
+//     "listener không chặn". last_status() = kết quả ghi.
+//   ApplyMode::NextSample: chỉ gửi yêu cầu (không chặn); luồng lấy mẫu ghi ở lần lấy mẫu kế tiếp.
+//     last_status() = yêu cầu đã được nhận chưa; kết quả ghi: last_status() của SensorConfigurator.
 //
 //   device::Tmp102Config tmp_from_params(const svc::ParamStore& p) {
 //       device::Tmp102Config c;
@@ -13,7 +16,8 @@
 //       return c;
 //   }
 //   static svc::SensorParamBinding<decltype(tmp_cfg), device::Tmp102Config> bind{tmp_cfg, params, kTmpRate,
-//                                                                               kTmpExtended, &tmp_from_params};
+//                                                                               kTmpExtended, &tmp_from_params,
+//                                                                               svc::ApplyMode::NextSample};  // tùy chọn
 //   bind.attach(bus);
 #include <atomic>
 #include <cstdint>
@@ -29,8 +33,9 @@ class SensorParamBinding final : public msg::IEventListener {
 public:
     using Build = Config (*)(const ParamStore&);
 
-    SensorParamBinding(Configurator& configurator, const ParamStore& params, ParamId first, ParamId last, Build build)
-        : cfg_(configurator), params_(params), first_(first), last_id_(last), build_(build) {}
+    SensorParamBinding(Configurator& configurator, const ParamStore& params, ParamId first, ParamId last, Build build,
+                       ApplyMode mode = ApplyMode::Immediate)
+        : cfg_(configurator), params_(params), first_(first), last_id_(last), build_(build), mode_(mode) {}
 
     core::Status attach(msg::EventBus& bus) {
         core::Status st = bus.subscribe(evt::kParamsLoaded, this);
@@ -43,7 +48,7 @@ public:
         const bool relevant = e.id == evt::kParamsLoaded ||
                               (e.id == evt::kParamChanged && e.get(pc) && pc.id >= first_ && pc.id <= last_id_);
         if (!relevant || build_ == nullptr) return;
-        last_status_ = static_cast<std::int8_t>(cfg_.configure(build_(params_)));
+        last_status_ = static_cast<std::int8_t>(cfg_.configure(build_(params_), mode_));
         applies_.fetch_add(1);
     }
 
@@ -56,6 +61,7 @@ private:
     ParamId first_;
     ParamId last_id_;
     Build build_;
+    ApplyMode mode_;
     std::atomic<std::int8_t> last_status_{0};
     std::atomic<std::uint32_t> applies_{0};
 };

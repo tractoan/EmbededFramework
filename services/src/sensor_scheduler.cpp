@@ -49,6 +49,16 @@ void SensorTaskBase::sampling_unlock() {
     if (config_waiting_.load() > 0) osal::sleep_ms(1);   // cho cấu hình đang chờ chen vào trước lát kế tiếp
 }
 
+bool SensorTaskBase::bind_deferred(IDeferredConfig* c) {
+    IDeferredConfig* expected = nullptr;
+    return deferred_.compare_exchange_strong(expected, c) || expected == c;
+}
+
+void SensorTaskBase::unbind_deferred(IDeferredConfig* c) {
+    IDeferredConfig* expected = c;
+    deferred_.compare_exchange_strong(expected, nullptr);
+}
+
 bool SensorTaskBase::take_discard() {
     std::uint32_t n = discard_.load();
     while (n > 0 && !discard_.compare_exchange_weak(n, n - 1)) {

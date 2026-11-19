@@ -75,6 +75,23 @@ public:
 
 class SensorScheduler;
 
+// Cấu hình chờ nhịp: SensorConfigurator đăng ký với task; luồng lấy mẫu gọi apply_pending() đầu lần lấy mẫu kế
+// tiếp, đang giữ khóa thiết bị.
+class IDeferredConfig {
+public:
+    virtual void apply_pending() = 0;
+
+protected:
+    ~IDeferredConfig() = default;
+};
+
+// Cách áp dụng cấu hình (SensorConfigurator::configure):
+//   Immediate  – ghi thiết bị NGAY trên thread gọi (chờ khóa thiết bị có giới hạn), trả kết quả ghi.
+//   NextSample – chỉ GỬI yêu cầu, trả ngay (không chặn, không đụng thiết bị); luồng lấy mẫu ghi ở đầu lần lấy
+//                mẫu kế tiếp, ngay trước lần đọc. Nhiều yêu cầu trước nhịp: chỉ cái mới nhất được ghi.
+//                Kết quả: last_status() / applied() / failures() / pending().
+enum class ApplyMode : std::uint8_t { Immediate, NextSample };
+
 // Nền chung của các adapter: KHÓA THIẾT BỊ, chu kỳ đổi được lúc chạy, bỏ mẫu sau khi đổi cấu hình.
 // Lấy mẫu và cấu hình (SensorConfigurator) không bao giờ chạm thiết bị cùng lúc: mỗi lần đọc giữ khóa,
 // cấu hình chen vào GIỮA hai lần đọc – không chờ nhịp lấy mẫu kế tiếp. Task chặn chờ theo lát kSliceMs
@@ -97,6 +114,11 @@ public:
 
     void attach(SensorScheduler* owner) { owner_.store(owner); }   // SensorScheduler::add() gọi
 
+    // Cấu hình chờ nhịp: một bộ cấu hình cho mỗi task. bind_deferred: false nếu task đã có bộ khác.
+    bool bind_deferred(IDeferredConfig* c);
+    void unbind_deferred(IDeferredConfig* c);
+    void post_deferred() { deferred_pending_.store(true); }   // có yêu cầu mới: áp dụng ở lần lấy mẫu kế tiếp
+
 protected:
     explicit SensorTaskBase(std::uint32_t period_ms) : period_(period_ms) {}
     // Khóa thiết bị cho một lần đọc / một lát chờ (RAII).
@@ -111,6 +133,12 @@ protected:
         SensorTaskBase& t_;
     };
     bool take_discard();   // true: mẫu này phải bỏ (đọc được nhưng không publish)
+    // Đầu MỖI lần lấy mẫu (sample()), đang giữ khóa thiết bị: áp dụng cấu hình chờ nhịp nếu có.
+    void run_deferred() {
+        if (deferred_pending_.load() && deferred_pending_.exchange(false)) {
+            if (IDeferredConfig* d = deferred_.load()) d->apply_pending();
+        }
+    }
 
 private:
     void sampling_lock();
@@ -121,6 +149,8 @@ private:
     std::atomic<std::uint32_t> period_;
     std::atomic<std::uint32_t> discard_{0};
     std::atomic<SensorScheduler*> owner_{nullptr};
+    std::atomic<IDeferredConfig*> deferred_{nullptr};
+    std::atomic<bool> deferred_pending_{false};
 };
 
 // Định kỳ: Read là method của Device (có thể là interface, vd. &device::ITemperatureSensor::read_deci_celsius).
@@ -136,6 +166,7 @@ public:
         core::Status st;
         {
             SamplingGuard g(*this);
+            run_deferred();
             st = (device_.*Read)(s);
         }
         if (core::is_ok(st) && !take_discard()) out_.publish(s, clock());
@@ -160,7 +191,7 @@ public:
     SamplingMode mode() const override { return SamplingMode::Blocking; }
     core::Status sample(SensorClock clock) override {
         const std::uint64_t deadline = clock() + period_ms();
-        for (;;) {
+        for (bool first = true;; first = false) {
             const std::uint64_t now  = clock();
             const std::uint32_t left = now < deadline ? static_cast<std::uint32_t>(deadline - now) : 0u;
             const std::uint32_t wait = left < kSliceMs ? left : kSliceMs;
@@ -168,6 +199,7 @@ public:
             core::Status st;
             {
                 SamplingGuard g(*this);
+                if (first) run_deferred();   // nhịp = một lần sample(), không phải một lát
                 st = (device_.*Read)(s, wait);
             }
             if (core::is_ok(st)) {
@@ -204,13 +236,14 @@ public:
     core::Status sample(SensorClock clock) override {
         const std::uint64_t deadline = clock() + period_ms();
         bool got                     = false;
-        while (!got) {
+        for (bool first = true; !got; first = false) {
             const std::uint64_t now  = clock();
             const std::uint32_t left = now < deadline ? static_cast<std::uint32_t>(deadline - now) : 0u;
             const std::uint32_t wait = left < kSliceMs ? left : kSliceMs;
             std::size_t n;
             {
                 SamplingGuard g(*this);
+                if (first) run_deferred();
                 std::uint8_t buf[kChunk];
                 n = uart_.read(buf, sizeof(buf), wait);
                 for (std::size_t i = 0; i < n; ++i) {
@@ -239,54 +272,114 @@ private:
     std::uint32_t bytes_ = 0;
 };
 
-// Cấu hình cảm biến, áp dụng NGAY trên thread người gọi (không chờ nhịp lấy mẫu): chiếm khóa thiết bị của
-// task (chờ tối đa lock_timeout_ms – một lần đọc đang dở / một lát chờ của task chặn), gọi Apply của driver,
-// nhả khóa; trả kết quả đồng bộ. Sau khi áp dụng thành công bỏ settle_samples mẫu kế tiếp (thời gian ổn định).
+// Cấu hình cảm biến, hai cách (ApplyMode):
+//   Immediate (mặc định) – áp dụng NGAY trên thread người gọi: chiếm khóa thiết bị của task (chờ tối đa
+//     lock_timeout_ms – một lần đọc đang dở / một lát chờ của task chặn), gọi Apply, nhả khóa; trả kết quả ghi.
+//   NextSample – gửi yêu cầu rồi trả ngay; luồng lấy mẫu gọi Apply đầu lần lấy mẫu kế tiếp (trước lần đọc).
+//     Không chặn người gọi (hợp với listener EventBus, ISR-thread, vòng điều khiển), không tranh khóa; cấu hình
+//     luôn rơi vào ĐÚNG ranh giới giữa hai mẫu. Trước khi scheduler chạy: áp dụng ở mẫu đầu tiên.
+// Thành công (cả hai cách): bỏ settle_samples mẫu kế tiếp (thời gian ổn định). Yêu cầu sau thắng yêu cầu trước:
+// một lần Immediate thành công hủy yêu cầu NextSample gửi TRƯỚC nó.
 //   static svc::SensorConfigurator<device::Tmp102, device::Tmp102Config, &device::Tmp102::apply> tmp_cfg{task, tmp102};
-//   tmp_cfg.configure({device::Tmp102Config::Rate::Hz8});   // Ok / lỗi bus / Busy
+//   tmp_cfg.configure(cfg);                               // Ok / lỗi bus / Busy – đã nằm trên chip
+//   tmp_cfg.configure(cfg, svc::ApplyMode::NextSample);   // Ok = đã nhận; kết quả: last_status()
 template <typename Device, typename Config, core::Status (Device::*Apply)(const Config&)>
-class SensorConfigurator : core::NonCopyable {
+class SensorConfigurator : core::NonCopyable, private IDeferredConfig {
 public:
     SensorConfigurator(SensorTaskBase& task, Device& device, std::uint32_t settle_samples = 0,
                        std::uint32_t lock_timeout_ms = 50)
         : task_(task), device_(device), settle_(settle_samples), lock_timeout_ms_(lock_timeout_ms) {}
+    ~SensorConfigurator() { task_.unbind_deferred(this); }
 
-    core::Status configure(const Config& cfg) {
-        if (!task_.lock_device(lock_timeout_ms_)) {
-            failures_.fetch_add(1);
-            return core::Status::Busy;   // thiết bị bận quá lâu (vd. driver kẹt)
-        }
-        const core::Status st = (device_.*Apply)(cfg);
-        if (core::is_ok(st)) {
-            {
-                osal::LockGuard g(mtx_);
-                current_ = cfg;
-                have_    = true;
-            }
-            if (settle_ != 0) task_.discard_next(settle_);
-            applied_.fetch_add(1);
-        } else {
-            failures_.fetch_add(1);
-        }
-        task_.unlock_device();
-        return st;
+    core::Status configure(const Config& cfg, ApplyMode mode = ApplyMode::Immediate) {
+        return mode == ApplyMode::NextSample ? request(cfg) : apply_now(cfg);
+    }
+    bool pending() const {   // còn yêu cầu NextSample chưa áp dụng
+        osal::LockGuard g(mtx_);
+        return has_pending_;
     }
     bool current(Config& out) const {   // cấu hình đang áp dụng (lần thành công gần nhất)
         osal::LockGuard g(mtx_);
         if (have_) out = current_;
         return have_;
     }
+    core::Status last_status() const { return static_cast<core::Status>(last_status_.load()); }   // lần ghi gần nhất
     std::uint32_t applied() const { return applied_.load(); }
     std::uint32_t failures() const { return failures_.load(); }
 
 private:
+    core::Status request(const Config& cfg) {
+        if (!task_.bind_deferred(this)) return core::Status::Busy;   // task đã có bộ cấu hình khác
+        {
+            osal::LockGuard g(mtx_);
+            pending_     = cfg;
+            pending_seq_ = ++seq_;
+            has_pending_ = true;
+        }
+        task_.post_deferred();
+        return core::Status::Ok;
+    }
+
+    core::Status apply_now(const Config& cfg) {
+        std::uint32_t my_seq;
+        {
+            osal::LockGuard g(mtx_);
+            my_seq = ++seq_;
+        }
+        if (!task_.lock_device(lock_timeout_ms_)) {
+            failures_.fetch_add(1);
+            last_status_.store(static_cast<std::int8_t>(core::Status::Busy));
+            return core::Status::Busy;   // thiết bị bận quá lâu (vd. driver kẹt)
+        }
+        const core::Status st = finish((device_.*Apply)(cfg), cfg, my_seq);
+        task_.unlock_device();
+        return st;
+    }
+
+    // Luồng lấy mẫu, đang giữ khóa thiết bị.
+    void apply_pending() override {
+        Config cfg;
+        std::uint32_t seq;
+        {
+            osal::LockGuard g(mtx_);
+            if (!has_pending_) return;
+            cfg          = pending_;
+            seq          = pending_seq_;
+            has_pending_ = false;
+        }
+        finish((device_.*Apply)(cfg), cfg, seq);
+    }
+
+    // Gọi khi đang giữ khóa thiết bị.
+    core::Status finish(core::Status st, const Config& cfg, std::uint32_t seq) {
+        if (core::is_ok(st)) {
+            {
+                osal::LockGuard g(mtx_);
+                current_ = cfg;
+                have_    = true;
+                if (has_pending_ && pending_seq_ < seq) has_pending_ = false;   // yêu cầu cũ hơn: đã bị thay
+            }
+            if (settle_ != 0) task_.discard_next(settle_);
+            applied_.fetch_add(1);
+        } else {
+            failures_.fetch_add(1);
+        }
+        last_status_.store(static_cast<std::int8_t>(st));
+        return st;
+    }
+
     SensorTaskBase& task_;
     Device& device_;
     std::uint32_t settle_;
     std::uint32_t lock_timeout_ms_;
-    mutable osal::Mutex mtx_;
+    mutable osal::Mutex mtx_;   // current_, pending_, seq
     Config current_{};
-    bool have_ = false;
+    Config pending_{};
+    bool have_               = false;
+    bool has_pending_        = false;
+    std::uint32_t seq_       = 0;
+    std::uint32_t pending_seq_ = 0;
+    std::atomic<std::int8_t> last_status_{0};
     std::atomic<std::uint32_t> applied_{0}, failures_{0};
 };
 

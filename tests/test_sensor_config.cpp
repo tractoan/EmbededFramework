@@ -1,4 +1,4 @@
-// Cấu hình cảm biến áp dụng NGAY (SensorConfigurator), đổi chu kỳ ngay, TMP102 thật (driver) trên bus giả,
+// Cấu hình cảm biến áp dụng NGAY hoặc CHỜ NHỊP (SensorConfigurator, ApplyMode), đổi chu kỳ ngay, TMP102 thật (driver) trên bus giả,
 // nối tham số -> cấu hình (SensorParamBinding, SensorPeriodBinding).
 #include <atomic>
 #include <chrono>
@@ -77,17 +77,22 @@ struct SlowDevice {
     core::Status read(std::int32_t& out) {
         inside.store(true);
         std::this_thread::sleep_for(std::chrono::microseconds(read_us.load()));
+        seen.store(value.load());   // cấu hình mà lần đọc này nhìn thấy
         inside.store(false);
         out = ++n;
         return core::Status::Ok;
     }
     core::Status apply(const int& v) {
         if (inside.load()) overlaps.fetch_add(1);
+        apply_thread.store(std::this_thread::get_id());
+        if (fail_apply.load()) return core::Status::Error;
         if (apply_us.load() > 0) std::this_thread::sleep_for(std::chrono::microseconds(apply_us.load()));
         value = v;
         return core::Status::Ok;
     }
-    std::atomic<bool> inside{false};
+    std::atomic<bool> inside{false}, fail_apply{false};
+    std::atomic<std::thread::id> apply_thread{};
+    std::atomic<int> seen{-1};
     std::atomic<int> overlaps{0}, value{0}, read_us{2000}, apply_us{0};
     std::int32_t n = 0;
 };
@@ -309,4 +314,151 @@ TEST(sensor_param_binding_applies_saved_and_changed_params_immediately) {
     ps.set(0x9001, 0);
     CHECK(!core::is_ok(bind.last_status()));
     CHECK_EQ(conf.failures(), 1u);
+}
+
+// ---------------------------------------------------------------- ApplyMode::NextSample (chờ nhịp)
+TEST(sensor_config_next_sample_waits_for_the_tick_and_runs_on_sampler) {
+    SlowDevice dev;
+    dev.read_us = 0;
+    msg::Topic<std::int32_t> topic;
+    SlowTask task("t", dev, topic, 200);
+    SlowConf conf(task, dev);
+    svc::SensorScheduler group;
+    group.add(&task);
+    CHECK(core::is_ok(group.start({"snsr", osal::Priority::High, 2048, nullptr}, nullptr)));
+    CHECK(wait_until([&] { return topic.sequence() == 1; }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    const auto t0 = std::chrono::steady_clock::now();
+    CHECK(core::is_ok(conf.configure(5, svc::ApplyMode::NextSample)));   // chỉ gửi yêu cầu
+    CHECK(ms_since(t0) < 5);
+    CHECK(conf.pending());
+    CHECK_EQ(dev.value.load(), 0);                                       // chưa đụng thiết bị
+    CHECK(wait_until([&] { return conf.applied() == 1; }, 1000));
+    const std::uint64_t waited = ms_since(t0);
+    CHECK(wait_until([&] { return topic.sequence() >= 2; }));
+    group.stop();
+    std::printf("    NextSample: applied after %lu ms (period 200 ms, requested ~20 ms after a sample)\n",
+                static_cast<unsigned long>(waited));
+    CHECK(waited >= 100 && waited < 400);          // đúng nhịp kế tiếp, không sớm hơn
+    CHECK(!conf.pending());
+    CHECK_EQ(dev.value.load(), 5);
+    CHECK_EQ(dev.seen.load(), 5);                  // lần đọc ngay sau đó đã thấy cấu hình mới
+    CHECK(dev.apply_thread.load() != std::this_thread::get_id());   // ghi trên luồng lấy mẫu
+    CHECK(core::is_ok(conf.last_status()));
+    CHECK_EQ(dev.overlaps.load(), 0);
+}
+
+TEST(sensor_config_next_sample_coalesces_is_superseded_and_settles) {
+    SlowDevice dev;
+    dev.read_us = 0;
+    msg::Topic<std::int32_t> topic;
+    SlowTask task("t", dev, topic, 100);
+    SlowConf conf(task, dev, /*settle_samples*/ 1);
+    // Trước khi scheduler chạy: gửi 3 yêu cầu -> chỉ cái mới nhất được ghi, ở mẫu đầu tiên.
+    for (int v = 1; v <= 3; ++v) CHECK(core::is_ok(conf.configure(v, svc::ApplyMode::NextSample)));
+    CHECK_EQ(conf.applied(), 0u);
+    task.sample(&osal::now_ms);
+    CHECK_EQ(conf.applied(), 1u);
+    CHECK_EQ(dev.value.load(), 3);
+    CHECK_EQ(dev.seen.load(), 3);
+    CHECK_EQ(topic.sequence(), 0u);                // settling: mẫu đọc ngay sau khi đổi bị bỏ
+    task.sample(&osal::now_ms);
+    CHECK_EQ(topic.sequence(), 1u);
+
+    // Immediate sau NextSample: yêu cầu cũ bị thay, không ghi đè lại ở nhịp sau.
+    CHECK(core::is_ok(conf.configure(7, svc::ApplyMode::NextSample)));
+    CHECK(core::is_ok(conf.configure(9)));
+    CHECK(!conf.pending());
+    task.sample(&osal::now_ms);
+    CHECK_EQ(dev.value.load(), 9);
+    CHECK_EQ(conf.applied(), 2u);
+    // NextSample sau Immediate: yêu cầu mới hơn vẫn được ghi.
+    CHECK(core::is_ok(conf.configure(11)));
+    CHECK(core::is_ok(conf.configure(12, svc::ApplyMode::NextSample)));
+    task.sample(&osal::now_ms);
+    CHECK_EQ(dev.value.load(), 12);
+
+    // Ghi lỗi ở nhịp: báo qua last_status()/failures(), cấu hình hiện hành giữ nguyên, không thử lại mãi.
+    dev.fail_apply = true;
+    CHECK(core::is_ok(conf.configure(13, svc::ApplyMode::NextSample)));
+    task.sample(&osal::now_ms);
+    CHECK(conf.last_status() == core::Status::Error);
+    CHECK_EQ(conf.failures(), 1u);
+    CHECK(!conf.pending());
+    int cur = 0;
+    CHECK(conf.current(cur) && cur == 12);
+    dev.fail_apply = false;
+
+    // NextSample gửi trong lúc một Immediate (gửi trước) đang chờ khóa: Immediate không được hủy yêu cầu mới hơn.
+    dev.read_us = 30000;
+    std::thread reader([&] { task.sample(&osal::now_ms); });
+    CHECK(wait_until([&] { return dev.inside.load(); }));
+    std::thread immediate([&] { CHECK(core::is_ok(conf.configure(20))); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    CHECK(core::is_ok(conf.configure(21, svc::ApplyMode::NextSample)));
+    reader.join();
+    immediate.join();
+    dev.read_us = 0;
+    CHECK_EQ(dev.value.load(), 20);
+    CHECK(conf.pending());
+    task.sample(&osal::now_ms);
+    CHECK_EQ(dev.value.load(), 21);
+
+    // Mỗi task một bộ cấu hình chờ nhịp.
+    SlowConf other(task, dev);
+    CHECK(other.configure(1, svc::ApplyMode::NextSample) == core::Status::Busy);
+    CHECK(core::is_ok(other.configure(1)));        // Immediate vẫn dùng được
+}
+
+TEST(sensor_config_next_sample_on_blocking_task_waits_for_the_next_sample_not_a_slice) {
+    DrdyDevice dev;
+    msg::Topic<std::int32_t> topic;
+    svc::BlockingSensorTask<DrdyDevice, std::int32_t, &DrdyDevice::read> task("imu", dev, topic, 500);
+    svc::SensorConfigurator<DrdyDevice, int, &DrdyDevice::apply> conf(task, dev);
+    svc::SensorScheduler group;
+    group.add(&task);
+    CHECK(core::is_ok(group.start({"imu", osal::Priority::High, 2048, nullptr}, nullptr)));
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));   // đang chờ dữ liệu
+    CHECK(core::is_ok(conf.configure(42, svc::ApplyMode::NextSample)));
+    std::this_thread::sleep_for(std::chrono::milliseconds(60));   // nhiều lát trôi qua...
+    CHECK_EQ(dev.value.load(), 0);                                // ...nhưng chưa sang lần lấy mẫu mới
+    dev.drdy.give();                                              // có mẫu -> lần lấy mẫu kế tiếp bắt đầu
+    CHECK(wait_until([&] { return topic.sequence() == 1; }));
+    CHECK(wait_until([&] { return dev.value.load() == 42; }, 200));
+    group.stop();
+}
+
+TEST(sensor_param_binding_next_sample_does_not_block_the_publisher) {
+    static const svc::ParamDef defs[] = {{0x9101, "slow.mode", 0, 0, 100, ""}};
+    struct Build {
+        static int from(const svc::ParamStore& p) { return p.get_or(0x9101, 0); }
+    };
+    mock::Storage nv;
+    msg::EventBus bus;
+    svc::ParamStore ps;
+    ps.init(&nv, &bus);
+    ps.register_params(defs, 1);
+    SlowDevice dev;
+    msg::Topic<std::int32_t> topic;
+    SlowTask task("t", dev, topic, 1000);
+    SlowConf conf(task, dev);
+    svc::SensorParamBinding<SlowConf, int> bind(conf, ps, 0x9101, 0x9101, &Build::from, svc::ApplyMode::NextSample);
+    CHECK(core::is_ok(bind.attach(bus)));
+
+    dev.read_us = 200000;                                         // thiết bị đang bận một lần đọc 200 ms
+    std::thread reader([&] { task.sample(&osal::now_ms); });
+    CHECK(wait_until([&] { return dev.inside.load(); }));
+    const auto t0 = std::chrono::steady_clock::now();
+    CHECK(core::is_ok(ps.set(0x9101, 4)));                        // CLI / Modbus / MAVLink đổi tham số
+    const std::uint64_t took = ms_since(t0);
+    std::printf("    param set with NextSample binding while device busy: %lu ms\n", static_cast<unsigned long>(took));
+    CHECK(took < 20);                                             // Immediate sẽ chờ 50 ms rồi Busy
+    CHECK(core::is_ok(bind.last_status()) && conf.pending());
+    reader.join();
+    CHECK_EQ(dev.value.load(), 0);
+    dev.read_us = 0;
+    task.sample(&osal::now_ms);                                   // nhịp kế tiếp
+    CHECK_EQ(dev.value.load(), 4);
+    CHECK(core::is_ok(conf.last_status()));
 }
