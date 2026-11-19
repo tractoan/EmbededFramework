@@ -7,6 +7,6 @@ add_library(ep_services STATIC
   src/command_service.cpp
   src/led_service.cpp
   src/sensor_scheduler.cpp
-  src/actuator.cpp)
+  src/output.cpp)
 target_include_directories(ep_services PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(ep_services PUBLIC ep_messaging ep_device)

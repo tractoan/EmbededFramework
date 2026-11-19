@@ -7,7 +7,7 @@
 namespace {
 class Echo final : public svc::ICommandHandler {
 public:
-    int on_command(int argc, char** argv, svc::CommandOutput& out) override {
+    int on_command(int argc, char** argv, svc::CommandReply& out) override {
         out.print("argc=%d last=%s\r\n", argc, argv[argc - 1]);
         return 0;
     }

@@ -45,7 +45,7 @@ bool Mutex::try_lock(std::uint32_t timeout_ms) {
     if (timeout_ms == kNoWait) return h_.m.try_lock();
     // Lưu ý công cụ: try_lock_for dùng pthread_mutex_clocklock, TSan của GCC 13 không chặn hàm này
     // -> báo nhầm "unlock of an unlocked mutex"/data race. Đúng khi chạy thật; code cần TSan kiểm tra
-    // nên dùng kNoWait + thử lại (xem services/src/actuator.cpp).
+    // nên dùng kNoWait + thử lại (xem services/src/output.cpp).
     return h_.m.try_lock_for(std::chrono::milliseconds(timeout_ms));
 }
 

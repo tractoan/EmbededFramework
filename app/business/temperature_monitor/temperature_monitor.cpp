@@ -127,7 +127,7 @@ void TemperatureMonitor::on_tick(std::uint64_t now_ms) {
     if (batch_n_ > 0) add_to_batch(value, now_ms);
 }
 
-int TemperatureMonitor::on_command(int /*argc*/, char** /*argv*/, svc::CommandOutput& out) {
+int TemperatureMonitor::on_command(int /*argc*/, char** /*argv*/, svc::CommandReply& out) {
     if (has_value_) {
         out.print("temperature: %s C\r\n", utils::Fixed(last_value_.load(), 1).c_str());
     } else {

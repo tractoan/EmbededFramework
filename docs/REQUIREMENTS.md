@@ -5,9 +5,9 @@
 
 | | |
 |---|---|
-| Phiên bản tài liệu | 1.1 |
-| Ứng với code | `main` @ `0eecddd` (sau PR #8) + hỗ trợ Nios II |
-| Số test tự động | 89 test case (`tests/`) – 87 chạy trên host Linux; target QNX chạy 88 (thêm 2 test riêng QNX, không có test riêng Linux) |
+| Phiên bản tài liệu | 1.2 |
+| Ứng với code | `main` @ `6b104a9` (sau PR #9) + gộp output (`Output<Cmd>`, LED là output) |
+| Số test tự động | 93 test case (`tests/`) – 91 chạy trên host Linux; target QNX chạy 92 (thêm 2 test riêng QNX, không có test riêng Linux) |
 
 ---
 
@@ -25,7 +25,7 @@
 10. [Messaging – MSG](#10-messaging--msg)
 11. [Services – SVC](#11-services--svc)
 12. [Lấy mẫu cảm biến – SNS](#12-lấy-mẫu-cảm-biến--sns)
-13. [Bộ chấp hành – ACT](#13-bộ-chấp-hành--act)
+13. [Output (bộ chấp hành & chỉ báo) – ACT](#13-output-bộ-chấp-hành--chỉ-báo--act)
 14. [Application runtime – APP](#14-application-runtime--app)
 15. [Truyền thông – COMM](#15-truyền-thông--comm)
 16. [Utils – UTIL](#16-utils--util)
@@ -114,6 +114,7 @@ thành `DROP` và ghi lý do. Yêu cầu tách đôi thì giữ mã cũ cho ph�
 | SRC-15 | Output/actuator có thể có thread riêng để tự xử lý (vd. servo với PID nội bộ); **không** đẩy PID lên business; target hướng tới platform cho drone |
 | SRC-16 | Tài liệu yêu cầu chi tiết để cập nhật và truy vết (tài liệu này) |
 | SRC-17 | Bổ sung hỗ trợ Nios II |
+| SRC-18 | Gộp mọi output của hệ thống vào một cơ chế dùng chung; đổi tên `Actuator` → `Output` (phương án A: `Output<Cmd>`, `OutputHub`, `OutputClass::Actuator/Indicator`; `CommandOutput` → `CommandReply`); gộp LED |
 
 | Mã | Quyết định thiết kế rút ra từ thảo luận |
 |---|---|
@@ -122,8 +123,9 @@ thành `DROP` và ghi lý do. Yêu cầu tách đôi thì giữ mã cũ cho ph�
 | DD-03 | Việc chậm là năng lực chung → service có thread riêng, API bất đồng bộ; business chỉ dùng worker cho tính toán/điều khiển đặc thù |
 | DD-04 | Dữ liệu tần số cao không đi qua EventBus (dùng `Topic`); EventBus cho sự kiện rời rạc |
 | DD-05 | Device không tự tạo thread; thread do service/sản phẩm cấp |
-| DD-06 | Output nhiều kênh cần đồng bộ (4 motor) → **một** actuator với lệnh nhiều kênh, không phải nhiều actuator |
-| DD-07 | Không làm "output scheduler" kiểu cảm biến cho tới khi có sản phẩm cần (≥ 3 actuator thread cùng nhịp, RAM eo hẹp) |
+| DD-06 | Output nhiều kênh cần đồng bộ (4 motor) → **một** output với lệnh nhiều kênh, không phải nhiều output |
+| DD-07 | Không làm "output scheduler" kiểu cảm biến cho tới khi có sản phẩm cần (≥ 3 output có thread cùng nhịp, RAM eo hẹp) |
+| DD-08 | Output phân loại theo mức an toàn: Actuator (nguy hiểm: arm, deadman, chốt khi kẹt, failsafe tắt) và Indicator (chỉ báo: failsafe KHÔNG tắt – không tắt đèn cảnh báo khi có sự cố) |
 
 ---
 
@@ -152,14 +154,14 @@ thành `DROP` và ghi lý do. Yêu cầu tách đôi thì giữ mã cũ cho ph�
 | MEM-004 | Mọi bảng/hàng đợi kích thước tĩnh, cấu hình bằng macro `EP_CFG_*` (mặc định trong `core/config.hpp`, ghi đè theo `products/<p>/config/product_config.hpp`) | SRC-07 | `platform/core/include/core/config.hpp` | Build 2 sản phẩm | `VER` |
 | MEM-005 | Payload lớn cấp từ pool tĩnh (`StaticBlockPool`, `PoolAllocator`, `ChainAllocator`), không heap | SRC-05, SRC-07 | `messaging/include/messaging/buffer_allocators.hpp` | `buffer_pool_picks_smallest_fitting_class_and_falls_back`, `buffer_chain_of_pools` | `VER` |
 | MEM-006 | Cấp phát nội bộ chỉ có trên host (`std::thread`) được miễn qua `HostAllocationExemption` | SRC-07 | `platform/osal/ports/posix/` | Chạy test + firmware không vi phạm | `VER` |
-| MEM-007 | Khởi động thất bại vì thiếu pool: log rõ task, mức dùng pool; dừng sạch các thread đã chạy | SRC-07 | `app/runtime/src/system.cpp` (`task_start_failed`) | `module_worker_start_failure_and_config_override`, `sensor_hub_real_threads_and_start_failure_cleanup`, `actuator_hub_start_failure_leaves_everything_safe` | `VER` |
+| MEM-007 | Khởi động thất bại vì thiếu pool: log rõ task, mức dùng pool; dừng sạch các thread đã chạy | SRC-07 | `app/runtime/src/system.cpp` (`task_start_failed`) | `module_worker_start_failure_and_config_override`, `sensor_hub_real_threads_and_start_failure_cleanup`, `output_hub_start_failure_leaves_everything_safe` | `VER` |
 
 Macro cấu hình hiện có (mặc định): `EP_CFG_MAX_EVENT_SUBSCRIBERS` 16 · `EP_CFG_EVENT_PAYLOAD_SIZE` 16 ·
 `EP_CFG_MAX_MODULES` 16 · `EP_CFG_APP_QUEUE_DEPTH` 32 · `EP_CFG_MAX_PARAMS` 48 · `EP_CFG_MAX_COMMANDS` 24 ·
 `EP_CFG_CLI_LINE_MAX` 96 · `EP_CFG_CLI_MAX_ARGS` 8 · `EP_CFG_CLI_ECHO` 1 · `EP_CFG_COMM_MAX_CHANNELS` 4 ·
 `EP_CFG_COMM_MAX_PROTOCOLS` 4 · `EP_CFG_STACK_POOL_BYTES` 16 KB · `EP_CFG_MAX_THREADS` 16 · `EP_CFG_LOG_LINE_MAX` 160 ·
 `EP_CFG_LOG_SINKS` 4 · `EP_CFG_LOG_LEVEL` 1 · `EP_CFG_MAX_BUFFER_POOLS` 8 · `EP_CFG_MAX_SENSOR_TASKS` 8 ·
-`EP_CFG_MAX_SENSOR_GROUPS` 4 · `EP_CFG_MAX_ACTUATORS` 8.
+`EP_CFG_MAX_SENSOR_GROUPS` 4 · `EP_CFG_MAX_OUTPUTS` 8.
 
 ## 5. Priority & lập lịch task – PRIO
 
@@ -167,7 +169,7 @@ Macro cấu hình hiện có (mặc định): `EP_CFG_MAX_EVENT_SUBSCRIBERS` 16 
 |---|---|---|---|---|---|
 | PRIO-001 | 16 mức priority 0..15 trung lập (`Idle` 0, `Low` 4, `Normal` 8, `High` 12, `Realtime` 15; `raise/lower` tương đối) | SRC-07 | `platform/osal/include/osal/types.hpp` | `memory_priority_levels` | `VER` |
 | PRIO-002 | Ánh xạ tuyến tính sang priority native từng port: FreeRTOS (`configMAX_PRIORITIES`), uC/OS-II (`EP_UCOS2_PRIO_TOP` + `STRIDE`, kiểm tra lúc build), uC/OS-III (`EP_UCOS3_PRIO_TOP`), POSIX realtime `SCHED_FIFO` = `EP_POSIX_RT_PRIO_BASE` + `EP_POSIX_RT_PRIO_STEP` × mức (mặc định 10..85, bật bằng `EP_POSIX_REALTIME`) | SRC-07, SRC-10, SRC-11 | `platform/osal/ports/*/` | POSIX: firmware A53/QNX-shim; uC/OS: kernel giả lập (VER-005) | `SIM` |
-| PRIO-003 | Priority/stack mọi task do sản phẩm cấu hình: `TaskPlan` (app, leds, actuator_supervisor), `add_channel(..., priority, stack)`, cấu hình worker, nhóm cảm biến, actuator | SRC-07 | `app/runtime/include/app/product.hpp` | `memory_thread_registry_reports_config`, `module_worker_start_failure_and_config_override` | `VER` |
+| PRIO-003 | Priority/stack mọi task do sản phẩm cấu hình: `TaskPlan` (app, leds, output_supervisor), `add_channel(..., priority, stack)`, cấu hình worker, nhóm cảm biến, output | SRC-07 | `app/runtime/include/app/product.hpp` | `memory_thread_registry_reports_config`, `module_worker_start_failure_and_config_override` | `VER` |
 | PRIO-004 | Thiếu quyền realtime / mlockall: cảnh báo và chạy tiếp (Linux: `CAP_SYS_NICE`, `CAP_IPC_LOCK`; QNX: `PROCMGR_AID_PRIORITY`, `MEM_LOCK`) | SRC-10, SRC-11 | `platform/target/zynqmp_a53_linux/`, `platform/target/qnx/` | Chạy QEMU / shim không quyền | `SIM` |
 | PRIO-005 | `sys tasks` liệt kê thread, priority, stack | SRC-07 | `app/runtime/src/system.cpp` | Firmware mô phỏng | `IMP` |
 
@@ -233,7 +235,7 @@ Macro cấu hình hiện có (mặc định): `EP_CFG_MAX_EVENT_SUBSCRIBERS` 16 
 | MSG-007 | EventBus không gọi được từ ISR; ISR dùng `utils::RingBuffer` rồi thread phát event | SRC-01 | Quy ước | – | `RULE` |
 
 Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamChanged` (+1), `kSensorFault` (+2),
-`kSensorRecovered` (+3), `kActuatorSafe` (+4), `kActuatorResumed` (+5) · `app::events::kTemperature` (+1),
+`kSensorRecovered` (+3), `kOutputSafe` (+4), `kOutputResumed` (+5) · `app::events::kTemperature` (+1),
 `kSensorFault` (+2), `kSensorRecovered` (+3), `kAlarmStateChanged` (+4), `kAlarmAckRequest` (+5), `kTemperatureBatch` (+6).
 
 ## 11. Services – SVC
@@ -242,11 +244,11 @@ Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamCha
 |---|---|---|---|---|---|
 | SVC-001 | `ParamStore`: đăng ký tham số (id, tên, mặc định, min/max, đơn vị), kiểm tra miền, phát `kParamChanged`, lưu NV có magic/version/CRC32; nạp bỏ qua giá trị ngoài miền/tham số lạ | SRC-01 | `services/src/param_store.cpp` | `param_store_validation_and_events`, `param_store_persistence_with_crc` | `VER` |
 | SVC-002 | `ParamStore` tuần tự hóa save/load (CLI + Modbus cùng lưu không hỏng NV; save sau luôn ghi giá trị mới hơn) | SRC-10 | `param_store.cpp` (`nv_mtx_`) | `param_store_concurrent_saves_keep_nv_valid` (+ mutation) | `VER` |
-| SVC-003 | `CommandService`: bảng lệnh tĩnh, tách tham số tại chỗ (không `strtok_r`), `help`; handler chạy trên thread kênh gọi | SRC-01, SRC-10 | `command_service.cpp` | `cli_protocol_line_editing_and_dispatch` | `VER` |
+| SVC-003 | `CommandService`: bảng lệnh tĩnh, phản hồi qua `CommandReply`, tách tham số tại chỗ (không `strtok_r`), `help`; handler chạy trên thread kênh gọi | SRC-01, SRC-10 | `command_service.cpp` | `cli_protocol_line_editing_and_dispatch` | `VER` |
 | SVC-004 | Lệnh `param list/get/set/save/reset` | SRC-01 | `param_cli.cpp` | Firmware mô phỏng | `IMP` |
 | SVC-005 | `Logger`: mức log, nhiều sink (≤ `EP_CFG_LOG_SINKS`), loại bỏ mức thấp lúc biên dịch (`EP_CFG_LOG_LEVEL`) | SRC-01 | `logger.cpp` | Gián tiếp qua các test | `IMP` |
-| SVC-006 | `LedService`: mẫu Off/On/BlinkSlow/BlinkFast/Heartbeat, thread riêng 50 ms; nghiệp vụ không biết chân GPIO | SRC-01 | `led_service.cpp` | Firmware QNX-shim (đếm cạnh thanh ghi) | `SIM` |
-| SVC-007 | Lệnh `sys info / modules / sensors / actuators / tasks / buffers / log / reboot / quit` | SRC-01 | `app/runtime/src/system.cpp` | Firmware mô phỏng | `IMP` |
+| SVC-006 | `LedService`: mặt tiền cho nghiệp vụ (`set/get` theo `LedId`, mẫu Off/On/BlinkSlow/BlinkFast/Heartbeat); bên dưới là **một** `LedOutput` loại Indicator, thread 50 ms cho mọi LED; nghiệp vụ không biết chân GPIO | SRC-01, SRC-18 | `services/src/led_service.cpp` | `test_led_output.cpp` (3 test); firmware QNX-shim/Nios-shim (đếm cạnh thanh ghi) | `VER` |
+| SVC-007 | Lệnh `sys info / modules / sensors / outputs / tasks / buffers / log / reboot / quit` | SRC-01 | `app/runtime/src/system.cpp` | Firmware mô phỏng | `IMP` |
 
 ## 12. Lấy mẫu cảm biến – SNS
 
@@ -263,21 +265,26 @@ Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamCha
 | SNS-009 | Kiểm tra tham số: task null, chu kỳ 0, quá `EP_CFG_MAX_SENSOR_TASKS`, start nhóm rỗng | SRC-13 | `sensor_scheduler.cpp` | `sensor_scheduler_validation` | `VER` |
 | SNS-010 | Độ phân giải lịch định kỳ 1 ms; nhanh hơn 1 kHz / jitter < 1 ms dùng task chặn chờ ngắt DRDY | SRC-14 | Tài liệu | – | `RULE` |
 
-## 13. Bộ chấp hành – ACT
+## 13. Output (bộ chấp hành & chỉ báo) – ACT
+
+> Mã nhóm giữ là `ACT` để không gãy truy vết; tên trong code đã đổi `Actuator` → `Output` (SRC-18).
 
 | Mã | Yêu cầu | Nguồn | Hiện thực | Kiểm chứng | Trạng thái |
 |---|---|---|---|---|---|
-| ACT-001 | Actuator tự chủ `Actuator<Command>`: tự xử lý phần cứng; bên ngoài chỉ `command()`. Vòng điều khiển nội bộ (vd. PID servo) nằm trong actuator | SRC-15 | `services/include/services/actuator.hpp` | `actuator_servo_runs_its_own_pid_and_converges` (mô hình động cơ: hội tụ 30.32°/30°, vọt lố 2.9 %) | `VER` |
-| ACT-002 | Hai chế độ: **trực tiếp** (`update_period_ms` = 0, ghi ngay trên thread người gọi) và **thread riêng** (lưu setpoint mới nhất, `on_update()` theo lịch không trôi) | SRC-15 | `actuator.hpp/.cpp` | `actuator_direct_mode_arm_and_command`, `actuator_servo_runs_its_own_pid_and_converges` | `VER` |
-| ACT-003 | Trạng thái an toàn: ngay sau `product::setup()`; khi tắt máy actuator dừng **đầu tiên** sau kênh; lớp con chỉ viết `write_safe()` | SRC-15 | `system.cpp`, `ActuatorHub` | `actuator_hub_supervisor_detects_stall_and_deadman_with_real_threads` (phần tắt máy) | `VER` |
-| ACT-004 | Arm/disarm: chỉ xuất khi đã arm; lệnh khi chưa arm bị từ chối (`Busy`) | SRC-15 | `actuator.cpp` | `actuator_direct_mode_arm_and_command` | `VER` |
-| ACT-005 | Deadman `command_timeout_ms`: lệnh quá hạn → an toàn; lệnh mới → tự xuất lại; kiểm tra cả trên thread riêng lẫn supervisor | SRC-15 | `actuator.cpp` | `actuator_deadman_forces_safe_and_new_command_resumes`, `actuator_threaded_deadman_runs_on_own_thread` | `VER` |
-| ACT-006 | Thread riêng kẹt quá `stall_timeout_ms` (mặc định max(4 × chu kỳ, 20 ms)) → thread giám sát độc lập ép an toàn và **chốt** tới khi arm lại; cảnh báo nếu priority giám sát ≤ priority thread actuator | SRC-15 | `ActuatorHub` | `actuator_hub_supervisor_detects_stall_and_deadman_with_real_threads` | `VER` |
-| ACT-007 | Sau khi `force_safe()` trả về, không có lần ghi giá trị khác an toàn nào (kiểm tra quyền và ghi phần cứng chung một vùng khóa) | SRC-15 | `actuator.hpp/.cpp` | `actuator_direct_no_output_after_force_safe_returns` (stress, + mutation) | `VER` |
-| ACT-008 | Sự kiện `kActuatorSafe` (kèm lý do) / `kActuatorResumed`; `sys actuators` | SRC-15 | `actuator.cpp`, `system.cpp` | Test ACT-004/005 kiểm tra event | `VER` |
-| ACT-009 | `ActuatorHub` khởi động lỗi → mọi actuator về an toàn, không còn thread | SRC-15 | `actuator.cpp` | `actuator_hub_start_failure_leaves_everything_safe` | `VER` |
-| ACT-010 | Output nhiều kênh cần đồng bộ (motor) dùng một actuator với lệnh nhiều kênh | DD-06 | Hướng dẫn | – | `RULE` |
+| ACT-001 | Output tự chủ `Output<Command>`: tự xử lý phần cứng; bên ngoài chỉ `command()`. Vòng điều khiển nội bộ (vd. PID servo, mẫu LED) nằm trong output | SRC-15, SRC-18 | `services/include/services/output.hpp` | `output_servo_runs_its_own_pid_and_converges` (mô hình động cơ: hội tụ 30.32°/30°, vọt lố 2.9 %) | `VER` |
+| ACT-002 | Hai chế độ: **trực tiếp** (`update_period_ms` = 0, ghi ngay trên thread người gọi) và **thread riêng** (lưu lệnh mới nhất, `on_update()` theo lịch không trôi) | SRC-15 | `output.hpp/.cpp` | `output_direct_mode_arm_and_command`, `output_servo_runs_its_own_pid_and_converges` | `VER` |
+| ACT-003 | Trạng thái an toàn: ngay sau `product::setup()`; khi tắt máy mọi output (kể cả LED) dừng **đầu tiên** sau kênh; lớp con chỉ viết `write_safe()` | SRC-15, SRC-18 | `system.cpp`, `OutputHub` | `output_hub_supervisor_detects_stall_and_deadman_with_real_threads`, `led_indicator_survives_failsafe_and_turns_off_at_shutdown` | `VER` |
+| ACT-004 | Arm/disarm (Actuator): chỉ xuất khi đã arm; lệnh khi chưa arm bị từ chối (`Busy`) | SRC-15 | `output.cpp` | `output_direct_mode_arm_and_command` | `VER` |
+| ACT-005 | Deadman `command_timeout_ms`: lệnh quá hạn → an toàn; lệnh mới → tự xuất lại; kiểm tra cả trên thread riêng lẫn supervisor | SRC-15 | `output.cpp` | `output_deadman_forces_safe_and_new_command_resumes`, `output_threaded_deadman_runs_on_own_thread` | `VER` |
+| ACT-006 | Thread riêng của **Actuator** kẹt quá `stall_timeout_ms` (mặc định max(4 × chu kỳ, 20 ms)) → thread giám sát độc lập ép an toàn và **chốt** tới khi arm lại; cảnh báo nếu priority giám sát ≤ priority thread actuator | SRC-15 | `OutputHub` | `output_hub_supervisor_detects_stall_and_deadman_with_real_threads` | `VER` |
+| ACT-007 | Sau khi `force_safe()` trả về, không có lần ghi giá trị khác an toàn nào (kiểm tra quyền và ghi phần cứng chung một vùng khóa) | SRC-15 | `output.hpp/.cpp` | `output_direct_no_output_after_force_safe_returns` (stress, + mutation) | `VER` |
+| ACT-008 | Sự kiện `kOutputSafe` (kèm lý do) / `kOutputResumed`; `sys outputs` (loại, chế độ, trạng thái, thống kê, giám sát) | SRC-15, SRC-18 | `output.cpp`, `system.cpp` | Test ACT-004/005 kiểm tra event; firmware mô phỏng | `VER` |
+| ACT-009 | `OutputHub` khởi động lỗi → mọi output về an toàn, không còn thread | SRC-15 | `output.cpp` | `output_hub_start_failure_leaves_everything_safe` | `VER` |
+| ACT-010 | Output nhiều kênh cần đồng bộ (motor) dùng một output với lệnh nhiều kênh | DD-06 | Hướng dẫn; `LedOutput` là ví dụ | – | `RULE` |
 | ACT-011 | Giới hạn: thread kẹt **đang ghi phần cứng** thì lần ghi đó không ngắt được; về an toàn ở chu kỳ kế tiếp. Motor cần watchdog/enable phần cứng độc lập | SRC-15 | Tài liệu | Test ACT-006 (phần "tỉnh lại") | `RULE` |
+| ACT-012 | Phân loại `OutputClass`: **Actuator** (mặc định: arm, chốt khi kẹt, `disarm_all()` tắt) / **Indicator** (luôn được xuất, `disarm_all()`/failsafe **không** tắt, không giám sát kẹt); cả hai về an toàn khi tắt máy | SRC-18, DD-08 | `output.hpp/.cpp` | `output_classes_failsafe_and_stall_policy_differ`, `led_indicator_survives_failsafe_and_turns_off_at_shutdown` | `VER` |
+| ACT-013 | `OutputHub` chỉ tạo thread giám sát khi có output cần giám sát (actuator hoặc deadman) – sản phẩm chỉ có LED không tốn thêm thread/stack | SRC-18 | `output.cpp` | `led_indicator_survives_failsafe_and_turns_off_at_shutdown` (đếm thread); firmware thermo_pro: 7 thread, pool 23552 B như trước | `VER` |
+| ACT-014 | LED là một output loại Indicator (`LedOutput`, một thread 50 ms cho mọi LED, lệnh = mẫu của từng LED); `LedService` giữ API cũ cho nghiệp vụ; hai nơi đặt hai LED khác nhau không ghi đè nhau | SRC-18 | `services/include/services/led_service.hpp` | `led_output_is_an_indicator_driving_all_leds_in_one_frame`, `led_patterns_levels` | `VER` |
 
 ## 14. Application runtime – APP
 
@@ -289,7 +296,7 @@ Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamCha
 | APP-004 | `ModuleWorker<Depth>` tùy chọn: thread riêng, hàng đợi tĩnh, `post()` không chặn (đầy → đếm), `on_job`, `on_worker_tick` lịch không trôi, đổi chu kỳ lúc chạy; khởi động sau mọi `on_start`, dừng trước `on_stop`; sản phẩm ghi đè cấu hình | SRC-12 | `module_worker.hpp/.cpp` | `test_module_worker.cpp` (6 test) | `VER` |
 | APP-005 | `on_command` không sửa trạng thái module trực tiếp: đọc atomic/ParamStore hoặc publish event | SRC-01 | Quy ước (vd. `AlarmController`) | Review | `RULE` |
 | APP-006 | `StateMachine` dùng hàm thành viên làm trạng thái, có Entry/Exit | SRC-01 | `state_machine.hpp` | Gián tiếp qua `test_alarm_controller.cpp` | `VER` |
-| APP-007 | `System::init`: board → services → link → device → product setup → `on_init` → nạp NV → LED → cảm biến → actuator → module → kênh → `kSystemStarted` → `end_startup()`. Dừng: kênh → actuator → cảm biến → module → LED | SRC-01, SRC-07 | `system.cpp` | Firmware mô phỏng, các test start-failure | `VER` |
+| APP-007 | `System::init`: board → services → link → device → LED vào OutputHub → product setup → output an toàn → `on_init` → nạp NV → cảm biến → output → module → kênh → `kSystemStarted` → `end_startup()`. Dừng: kênh → output (kể cả LED) → cảm biến → module | SRC-01, SRC-07 | `system.cpp` | Firmware mô phỏng, các test start-failure | `VER` |
 
 ## 15. Truyền thông – COMM
 
@@ -344,7 +351,7 @@ Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamCha
 | VER-006 | Lớp giả lập QNX (ngoài repo): `devctl` với TMP102 giả, `mmap_device_memory` trả vùng nhớ dùng chung theo địa chỉ vật lý, luồng lấy mẫu cạnh thanh ghi; header `hw/i2c.h` thật | HAL-007, TGT-005 | `SIM` |
 | VER-007 | Kiểm thử chéo giao thức bằng client độc lập: Modbus master qua pty, trạm mặt đất MAVLink tối giản (thư viện chuẩn, đối chiếu định dạng với pymavlink) | COMM-004/005 | `VER` |
 | VER-008 | Fuzz chuỗi cấu hình GPIO (1 triệu chuỗi dưới ASan/UBSan) | HAL-006 | `VER` |
-| VER-009 | Mutation test thủ công: cài lỗi có chủ đích, test phải bắt. Kết quả: MMIO 7/7, `QnxI2c` 4/4, worker 3/3, sensor 7/7 + 6/6, actuator 10/10, PIO Nios II 5/5, flash 2/2 (+1 mutation tương đương), `FdUart` 1/1 | Các tính năng mới | `VER` |
+| VER-009 | Mutation test thủ công: cài lỗi có chủ đích, test phải bắt. Kết quả: MMIO 7/7, `QnxI2c` 4/4, worker 3/3, sensor 7/7 + 6/6, actuator 10/10, output class + LED 6/6, PIO Nios II 5/5, flash 2/2 (+1 mutation tương đương), `FdUart` 1/1 | Các tính năng mới | `VER` |
 | VER-010 | Giới hạn công cụ đã biết: TSan của GCC 13 không chặn `pthread_mutex_clocklock` (`try_lock_for`) → code cần TSan kiểm tra dùng `try_lock(kNoWait)` + thử lại | VER-002 | `RULE` |
 | VER-011 | Chưa kiểm chứng: CPU ARM thật (thứ tự bộ nhớ yếu), phần cứng thật mọi target, qcc, BSP Vitis hoàn chỉnh, toolchain STM32, `nios2-elf-gcc` + FPGA | – | `PLN` |
 | VER-012 | Kiểm chứng Nios II không có toolchain (ngoài repo): biên dịch bằng g++ host với header thật của BSP Nios II công khai (DECA: `system.h`, HAL, driver, uC/OS-II bản Nios; driver I2C Avalon từ `hal_altera`, OpenCores từ BSP công khai), builtin nios2 thay bằng stub; chạy firmware với kernel uC/OS-II giả lập + HAL giả (thanh ghi trong bộ nhớ, flash lưu file, TMP102 trên I2C OpenCores, JTAG UART = pty) | TGT-007, HAL-015 | `SIM` |
@@ -371,8 +378,8 @@ Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamCha
 | PLN-001 | HAL: `IPwm` / output timer (DShot), `ISpi`, `IAdc`, encoder / timer capture (+ bản mô phỏng) | SRC-15, drone | `PLN` |
 | PLN-002 | Parser thật cho `StreamSensorTask`: NMEA, UBX (GNSS), SBUS/CRSF (máy thu RC) | SNS-004 | `PLN` |
 | PLN-003 | Kích hoạt theo mẫu mới: `Topic` có thông báo (semaphore) để vòng điều khiển chạy ngay khi có mẫu IMU | MSG-005, drone | `PLN` |
-| PLN-004 | Actuator: gom nhiều actuator dùng chung một thread (khi ≥ 3 actuator cùng nhịp, RAM eo hẹp) | DD-07 | `PLN` |
-| PLN-005 | Actuator: phân xử nhiều nguồn lệnh theo priority (failsafe > tay > tự động), giới hạn/ramp | ACT | `PLN` |
+| PLN-004 | Output: gom nhiều output dùng chung một thread (khi ≥ 3 output có thread cùng nhịp, RAM eo hẹp) | DD-07 | `PLN` |
+| PLN-005 | Output: phân xử nhiều nguồn lệnh theo priority (failsafe > tay > tự động), giới hạn/ramp | ACT | `PLN` |
 | PLN-006 | MAVLink v2; tách `communication/mavlink/messages/`; sinh code từ XML dialect; mission protocol | COMM-005, DD-02 | `PLN` |
 | PLN-007 | Service bất đồng bộ kiểu yêu cầu/phản hồi (cặp event có `request_id`) | MSG-003 | `PLN` |
 | PLN-008 | Mô hình executor: sản phẩm gán module vào nhiều thread ứng dụng | APP-002, SMP | `PLN` |
@@ -412,7 +419,8 @@ Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamCha
 | | `sensor_scheduler_runs_each_task_at_its_period`, `sensor_scheduler_does_not_drift_and_resets_after_overrun` | SNS-002 |
 | | `sensor_scheduler_fault_and_recovery_events`, `sensor_scheduler_validation`, `sensor_task_adapts_interface_method`, `sensor_hub_real_threads_and_start_failure_cleanup` | SNS-005, SNS-009, SNS-001, SNS-007 |
 | `test_sensor_blocking.cpp` | `sensor_blocking_task_must_own_its_group`, `sensor_stream_task_parses_across_reads_and_resyncs`, `sensor_blocking_drdy_fault_recovery_and_stop_latency`, `sensor_blocking_fast_failure_backs_off` | SNS-003, SNS-004, SNS-005, SNS-006 |
-| `test_actuator.cpp` | `actuator_direct_mode_arm_and_command`, `actuator_direct_no_output_after_force_safe_returns`, `actuator_deadman_forces_safe_and_new_command_resumes`, `actuator_servo_runs_its_own_pid_and_converges`, `actuator_threaded_deadman_runs_on_own_thread`, `actuator_hub_supervisor_detects_stall_and_deadman_with_real_threads`, `actuator_hub_start_failure_leaves_everything_safe` | ACT-001 … ACT-009 |
+| `test_output.cpp` | `output_direct_mode_arm_and_command`, `output_direct_no_output_after_force_safe_returns`, `output_deadman_forces_safe_and_new_command_resumes`, `output_servo_runs_its_own_pid_and_converges`, `output_threaded_deadman_runs_on_own_thread`, `output_hub_supervisor_detects_stall_and_deadman_with_real_threads`, `output_hub_start_failure_leaves_everything_safe`, `output_classes_failsafe_and_stall_policy_differ` | ACT-001 … ACT-012 |
+| `test_led_output.cpp` | `led_patterns_levels`, `led_output_is_an_indicator_driving_all_leds_in_one_frame`, `led_indicator_survives_failsafe_and_turns_off_at_shutdown` | SVC-006, ACT-003, ACT-012…014 |
 
 ## 23. Lịch sử bàn giao (PR → yêu cầu)
 
@@ -428,4 +436,5 @@ Event đang dùng: `sys::kSystemStarted/kSystemShutdown` · `svc::evt::kParamCha
 | [#6](https://github.com/tractoan/EmbededFramework/pull/6) | `Topic`, `SensorScheduler` (định kỳ + chặn + dòng byte) | MSG-005/006, SNS-001…010 |
 | [#7](https://github.com/tractoan/EmbededFramework/pull/7) | Actuator tự chủ + `ActuatorHub`; `PeriodicSchedule` dùng chung | ACT-001…011, APP-007 |
 | [#8](https://github.com/tractoan/EmbededFramework/pull/8) | Tài liệu yêu cầu | SRC-16 |
-| (PR này) | Hỗ trợ Intel Nios II + uC/OS-II; sửa vùng găng port uC/OS-II | SRC-17, OSAL-007, HAL-012…016, TGT-006/007 |
+| [#9](https://github.com/tractoan/EmbededFramework/pull/9) | Hỗ trợ Intel Nios II + uC/OS-II; sửa vùng găng port uC/OS-II | SRC-17, OSAL-007, HAL-012…016, TGT-006/007 |
+| (PR này) | Gộp output: `Actuator` → `Output`, `OutputClass` Actuator/Indicator, LED là output, giám sát chỉ khi cần; `CommandOutput` → `CommandReply` | SRC-18, DD-08, ACT-001…014, SVC-003/006/007, APP-007 |

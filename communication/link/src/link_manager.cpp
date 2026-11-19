@@ -94,7 +94,7 @@ ProtocolId LinkManager::setting(std::size_t ch) const {
     return ch < count_ ? static_cast<ProtocolId>(channels_[ch].requested.load()) : proto::kOff;
 }
 
-int LinkManager::on_command(int argc, char** argv, svc::CommandOutput& out) {
+int LinkManager::on_command(int argc, char** argv, svc::CommandReply& out) {
     const char* sub = argc >= 2 ? argv[1] : "list";
     if (std::strcmp(sub, "list") == 0) {
         for (std::size_t i = 0; i < count_; ++i) {

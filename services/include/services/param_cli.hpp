@@ -8,7 +8,7 @@ namespace svc {
 class ParamCli final : public ICommandHandler {
 public:
     void init(ParamStore* store) { store_ = store; }
-    int on_command(int argc, char** argv, CommandOutput& out) override;
+    int on_command(int argc, char** argv, CommandReply& out) override;
 
 private:
     ParamStore* store_ = nullptr;

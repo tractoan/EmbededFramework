@@ -37,7 +37,7 @@ private:
     class SysCli final : public svc::ICommandHandler {
     public:
         explicit SysCli(System& sys) : sys_(sys) {}
-        int on_command(int argc, char** argv, svc::CommandOutput& out) override;
+        int on_command(int argc, char** argv, svc::CommandReply& out) override;
 
     private:
         System& sys_;
@@ -55,7 +55,7 @@ private:
     TaskPlan tasks_;
     ModuleManager modules_;
     svc::SensorHub sensors_;
-    svc::ActuatorHub actuators_;
+    svc::OutputHub outputs_;
     comm::UartStream console_stream_;
     comm::Services comm_services_{bus_, params_, commands_};
     comm::LinkManager links_;

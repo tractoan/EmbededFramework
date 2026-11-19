@@ -32,7 +32,7 @@ Mục tiêu:
 │  cli/ CliProtocol · modbus/ ModbusRtu+Map · mavlink/ MavlinkV1+Map     │
 ├────────────────────────────────────────────────────────────────────────┤
 │ SERVICES (services/)  dịch vụ hệ thống: có trạng thái, có chính sách   │
-│  ParamStore(NV+CRC) · CommandService(bảng lệnh) · Logger · LedService  │
+│  ParamStore · CommandService · Logger · Sensor/OutputHub · LedService  │
 ├────────────────────────────────────────────────────────────────────────┤
 │ MESSAGING (messaging/)  lõi giao tiếp, không phụ thuộc nền tảng        │
 │  Event · EventBus · Buffer + pool tĩnh (BlockPool/Pool/ChainAllocator) │
@@ -151,7 +151,7 @@ EmbededFramework/
 ├── services/
 │   └── include/services/       # param_store, param_cli, command_service, logger, led_service,
 │                               # sensor_scheduler (ISensorTask, SensorTask<>, SensorScheduler, SensorHub),
-│                               # actuator (Actuator<Cmd>, ActuatorHub), periodic_schedule
+│                               # output (Output<Cmd>, OutputHub; LED là một output), periodic_schedule
 ├── communication/
 │   ├── link/                   # byte_stream, protocol, link_manager      (ep_comm)
 │   ├── net/                    # tcp_server/tcp_client/udp stream         (ep_comm_net, khi có mạng)
@@ -177,7 +177,7 @@ EmbededFramework/
  [ISR] ──give_from_isr──► driver/HAL buffer
                                   │
  ┌ thread kênh comm ┐   ┌── thread "led" ──┐    ┌── service khác ──┐
- │ console/aux: CLI,│   │ LedService 50ms  │    │ ParamStore.set() │
+ │ console/aux: CLI,│   │ LedOutput 50ms   │    │ ParamStore.set() │
  │ Modbus... (RX)   │   │                  │    │                  │
  └───────┬──────────┘   └──────────────────┘    └───────┬──────────┘
          │ publish(Event)                               │ publish(kParamChanged)
@@ -293,42 +293,53 @@ Nhóm định kỳ theo **bus và nhịp**, không theo loại cảm biến: tas
 chậm đặt chung nhóm với IMU 1 kHz sẽ làm trễ IMU. Lịch định kỳ theo đồng hồ OSAL (1 ms); nhanh hơn 1 kHz hoặc
 jitter dưới 1 ms: dùng task **chặn** chờ ngắt DRDY.
 
-### Bộ chấp hành: `svc::Actuator<Cmd>` (tự chủ, có thể có thread riêng)
+### Output: `svc::Output<Cmd>` (mọi thứ đưa ra phần cứng – tự chủ, có thể có thread riêng)
 
-Mỗi actuator (servo, ESC, relay, stepper, heater…) **tự xử lý phần cứng của nó**; bên ngoài (nghiệp vụ,
-giao thức, failsafe) chỉ gọi `command()`. Vòng điều khiển nội bộ (PID vị trí của servo, làm mới khung ESC,
-ramp của stepper) là việc riêng của actuator – chạy trên thread riêng của nó.
+Mỗi output (servo, ESC, relay, heater, LED, còi…) **tự xử lý phần cứng của nó**; bên ngoài (nghiệp vụ, giao
+thức, failsafe) chỉ gọi `command()`. Vòng điều khiển nội bộ (PID vị trí của servo, làm mới khung ESC, mẫu nhấp
+nháy của LED) là việc riêng của output – chạy trên thread riêng của nó. `OutputHub` đăng ký và quản lý **mọi**
+output của hệ thống, kể cả LED.
 
 ```cpp
 struct ServoCmd { float deg; };
-class Servo final : public svc::Actuator<ServoCmd> {
+class Servo final : public svc::Output<ServoCmd> {
 public:
-    Servo(...) : Actuator("servo", {/*update_period_ms*/ 2, /*command_timeout_ms*/ 200}) {}
+    Servo(...) : Output("servo", {/*update_period_ms*/ 2, /*command_timeout_ms*/ 200}) {}   // mặc định: Actuator
 private:
     void on_update(const ServoCmd& sp, std::uint64_t now) override {   // thread riêng, mỗi 2 ms
         pwm_.set_duty(pid_.update(sp.deg - feedback_deg(), 0.002f));   // PID nội bộ của servo
     }
     void write_safe() override { pwm_.set_duty(0); }                   // trạng thái an toàn
 };
-// product::setup():  s.actuators.add(&servo, {"servo", osal::Priority::High, 2048, nullptr});
+// product::setup():  s.outputs.add(&servo, {"servo", osal::Priority::High, 2048, nullptr});
 // bên ngoài:         servo.arm();  servo.command({30.0f});
 ```
 
 | Chế độ (`update_period_ms`) | Hành vi | Ví dụ |
 |---|---|---|
 | `0` – **trực tiếp** | `command()` ghi phần cứng ngay trên thread người gọi (`on_command`) | relay, servo RC, còi |
-| `> 0` – **thread riêng** | `command()` chỉ lưu setpoint mới nhất (không chặn); thread của actuator gọi `on_update(setpoint)` theo lịch không trôi | servo tự làm (PID), ESC, stepper |
+| `> 0` – **thread riêng** | `command()` chỉ lưu lệnh mới nhất (không chặn); thread của output gọi `on_update(lệnh)` theo lịch không trôi | servo tự làm (PID), ESC, stepper, LED |
 
-An toàn – chung cho mọi actuator, lớp con chỉ viết `write_safe()`:
+Hai loại theo mức an toàn (`Config::cls`):
 
-| Cơ chế | Hành vi |
-|---|---|
-| Khởi động / tắt máy | `write_safe()` ngay sau `product::setup()`; khi dừng, actuator về an toàn **trước** mọi thứ khác |
-| Arm | Chỉ xuất khi đã `arm()`; chưa arm / `disarm()` → an toàn, lệnh bị từ chối (`Busy`) |
-| Deadman | Không có lệnh mới quá `command_timeout_ms` → an toàn; lệnh mới → tự xuất lại |
-| Thread kẹt | Thread giám sát độc lập (`TaskPlan::actuator_supervisor`, priority cao hơn actuator) thấy thread riêng không chạy quá `stall_timeout_ms` (mặc định 4 × chu kỳ, ≥ 20 ms) → an toàn + **chốt** (phải `arm()` lại) |
-| Không ghi sau khi đã ép an toàn | Kiểm tra quyền xuất và ghi phần cứng nằm trong cùng vùng khóa của actuator: sau khi `force_safe()` trả về, không còn lần ghi giá trị nào khác |
-| Sự kiện | `svc::evt::kActuatorSafe` (lý do) / `kActuatorResumed` lên EventBus; `sys actuators` in trạng thái |
+| | `OutputClass::Actuator` (mặc định) | `OutputClass::Indicator` |
+|---|---|---|
+| Dùng cho | tác động vật lý, có thể nguy hiểm: motor, servo, van, heater, relay tải | chỉ báo cho người: LED, còi |
+| Arm | bắt buộc `arm()`; chưa arm → lệnh bị từ chối (`Busy`) | luôn được xuất |
+| Failsafe (`OutputHub::disarm_all()`) | về an toàn | **giữ nguyên** – không tắt đèn cảnh báo đúng lúc có sự cố |
+| Thread riêng kẹt | thread giám sát ép an toàn + **chốt** (phải `arm()` lại) | không giám sát |
+| Khởi động / tắt máy | an toàn ngay sau `product::setup()`; tắt máy → an toàn **trước** mọi thứ khác | như actuator (tắt máy → tắt) |
+| Deadman `command_timeout_ms` | có (nếu cấu hình) | có (nếu cấu hình) |
+
+Chung cho mọi output: kiểm tra quyền xuất và ghi phần cứng nằm trong cùng vùng khóa – sau khi `force_safe()`
+trả về, không còn lần ghi giá trị nào khác; sự kiện `svc::evt::kOutputSafe` (lý do) / `kOutputResumed`;
+`sys outputs` in trạng thái. Thread giám sát (`TaskPlan::output_supervisor`, priority cao hơn thread actuator)
+**chỉ được tạo khi cần** (có actuator hoặc deadman) – sản phẩm chỉ có LED không tốn thêm thread.
+
+**LED** là một output loại Indicator: `LedOutput` điều khiển **mọi** LED bằng một thread 50 ms (lệnh = mẫu
+của từng LED), nghiệp vụ vẫn gọi `ctx.leds.set(svc::LedId::Alarm, svc::LedPattern::BlinkFast)` như trước.
+
+Output nhiều kênh cần đồng bộ (4 motor) dùng **một** output với lệnh nhiều kênh, không phải nhiều output.
 
 Giới hạn: nếu thread riêng kẹt **ngay trong lúc ghi phần cứng** (đang giữ khóa), lần ghi đó không thể bị ngắt –
 actuator bị chốt và trở về an toàn ở chu kỳ kế tiếp khi thread chạy lại. Phần cứng cần ngắt tức thời (cắt
@@ -337,15 +348,15 @@ motor khi treo) nên có thêm watchdog/enable phần cứng độc lập với 
 ### Trình tự khởi động (`app::System::init`)
 
 1. `board.init()` → gắn console vào Logger
-2. Khởi tạo service: ParamStore, CommandService, LedService
+2. Khởi tạo service: ParamStore, CommandService; LED đăng ký vào `OutputHub` (output loại Indicator)
 3. `LinkManager::init()` (đăng ký lệnh `link`)
 4. Bring-up thiết bị: driver gắn lên bus HAL (`Tmp102` ← `II2c`) → `Devices`
 5. `product::setup()` → thêm module + khai báo kênh/giao thức; rồi `on_init()` từng module (đăng ký tham số, lệnh)
 6. `params.load()` từ NV, gồm cả lựa chọn giao thức `comm.<kênh>` (CRC sai/không có → giữ mặc định)
-7. Start service → các nhóm cảm biến (`SensorHub`) → actuator (`ActuatorHub`: thread riêng + giám sát, vẫn
-   chưa arm) → `on_start()` từng module → `links.start()` (mỗi kênh bật giao thức đã chọn) → publish
-   `kSystemStarted`. Actuator được ghi trạng thái an toàn ngay sau `product::setup()`.
-   Khi dừng: kênh → **actuator về an toàn** → cảm biến → module.
+7. Start service → các nhóm cảm biến (`SensorHub`) → output (`OutputHub`: thread riêng + giám sát nếu cần;
+   actuator chưa arm) → `on_start()` từng module → `links.start()` (mỗi kênh bật giao thức đã chọn) → publish
+   `kSystemStarted`. Mọi output được ghi trạng thái an toàn ngay sau `product::setup()`.
+   Khi dừng: kênh → **mọi output về an toàn** (LED tắt) → cảm biến → module.
 8. `osal::end_startup()`: **niêm phong bộ nhớ** – từ đây cấm heap và cấm lấy thêm stack (xem dưới)
 
 Nếu bước 7 thất bại (vd. vùng stack không đủ), các thread đã khởi động được dừng sạch và lỗi chỉ rõ task nào,
@@ -377,7 +388,7 @@ Sản phẩm cấu hình priority + stack của **mọi task do framework tạo*
 
 ```cpp
 s.tasks.app  = osal::ThreadConfig{"app", osal::Priority::High, 4096, nullptr};   // nghiệp vụ (ModuleManager)
-s.tasks.leds = osal::ThreadConfig{"led", osal::Priority::Low, 1024, nullptr};    // LedService
+s.tasks.leds = osal::ThreadConfig{"led", osal::Priority::Low, 1024, nullptr};    // LedOutput
 s.links.add_channel("console", &s.console, {&cli}, comm::proto::kCli, osal::Priority{6}, 4096);   // mỗi kênh
 ```
 

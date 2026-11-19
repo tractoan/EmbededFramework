@@ -32,7 +32,7 @@ public:
     core::Status on_start() override;
     void on_event(const msg::Event& e) override;
 
-    int on_command(int argc, char** argv, svc::CommandOutput& out) override;   // "alarm"
+    int on_command(int argc, char** argv, svc::CommandReply& out) override;   // "alarm"
 
     events::AlarmLevel level() const { return level_.load(); }
 
