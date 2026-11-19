@@ -130,6 +130,12 @@ core::Status ParamStore::save() {
 }
 
 core::Status ParamStore::load() {
+    const core::Status st = load_from_nv();
+    if (bus_ != nullptr) bus_->publish(msg::Event::make(evt::kParamsLoaded, ParamsLoaded{st}));
+    return st;
+}
+
+core::Status ParamStore::load_from_nv() {
     if (storage_ == nullptr) return core::Status::NotSupported;
     osal::LockGuard nv(nv_mtx_);
 
