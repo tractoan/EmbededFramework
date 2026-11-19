@@ -13,6 +13,7 @@ Lệnh:
   output <kênh> <0|1>          đặt một output (OUTPUT_SET)
   outputs <mask hex>           đặt toàn bộ output
   relay <kênh> <0|1>           đặt output bằng COMMAND_LONG(MAV_CMD_DO_SET_RELAY) chuẩn
+  arm | disarm                 cho phép / cấm xuất DO (MAV_CMD_COMPONENT_ARM_DISARM); disarm -> mọi DO tắt
   gnss "<lệnh>" [--baud B]     gửi lệnh cấu hình tới máy thu GNSS (SERIAL_CONTROL, tự thêm CR LF)
   params                       liệt kê tham số
   param-set <tên> <giá trị>    đổi tham số (PARAM_SET)
@@ -32,6 +33,7 @@ from mavlink_dialect import Codec, bringup_defs  # noqa: E402
 ROLE = {0: 'loop', 1: 'GCS', 2: 'GNSS', 3: 'off'}
 RESULT = {0: '-', 1: 'PASS', 2: 'TIMEOUT', 3: 'MISMATCH', 4: 'OPEN-ERR'}
 GNSS = {0: 'DETECTING', 1: 'CONNECTED', 2: 'ABSENT -> loopback'}
+DO_STATE = {0: 'active', 1: 'DISARMED', 2: 'armed (no command)', 3: 'DEADMAN', 4: 'STALLED', 5: 'shutdown'}
 SEV = ['EMERG', 'ALERT', 'CRIT', 'ERROR', 'WARN', 'NOTICE', 'INFO', 'DEBUG']
 
 
@@ -145,7 +147,8 @@ def monitor(gcs, seconds):
                       RESULT.get(s['result'][i], '?') if s['role'][i] == 0 else '', s['pass_count'][i], s['fail_count'][i]))
         if 'IO_STATUS' in state:
             io = state['IO_STATUS']
-            print('  DI %s   DO %s' % (bits(io['input_mask'], io['input_count']), bits(io['output_mask'], io['output_count'])))
+            print('  DI %s   DO %s  [%s]' % (bits(io['input_mask'], io['input_count']), bits(io['output_mask'], io['output_count']),
+                                         DO_STATE.get(io.get('output_state', 0), '?')))
         for k in ('IMU0', 'IMU1', 'IMU2', 'IMU3'):
             if k in state:
                 d = state[k]
@@ -193,6 +196,8 @@ def main():
                      target_system=gcs.tsys, target_component=gcs.tcomp)
         elif a.cmd == 'relay':
             print('result', gcs.command(181, int(a.args[0]), int(a.args[1])))
+        elif a.cmd in ('arm', 'disarm'):
+            print('result', gcs.command(400, 1 if a.cmd == 'arm' else 0))
         elif a.cmd == 'gnss':
             data = (' '.join(a.args) + '\r\n').encode() if a.args else b''
             for k in range(0, max(len(data), 1), 70):

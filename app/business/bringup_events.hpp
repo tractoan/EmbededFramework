@@ -26,6 +26,7 @@ inline constexpr EventId kGnssRxData       = kBase + 6;   // GnssDataHeader + by
 inline constexpr EventId kGnssTxRequest    = kBase + 7;   // GnssTxHeader + byte           (lệnh cấu hình tới máy thu)
 inline constexpr EventId kStatusText       = kBase + 8;   // StatusHeader + văn bản (không có '\0')
 inline constexpr EventId kGnssFix          = kBase + 9;   // record device::GnssFix (giải mã NMEA: giờ, ngày, lat, lon...)
+inline constexpr EventId kOutputArmRequest = kBase + 10;  // inline OutputArmRequest       (arm / disarm DO: giao diện / CLI)
 
 inline constexpr std::size_t kMaxSerial     = 16;    // ok_mask/tested_mask 16 bit
 inline constexpr std::size_t kGnssChunkMax  = 512;   // byte GNSS tối đa trong một event
@@ -74,11 +75,16 @@ struct IoStatus {
     std::uint32_t outputs;   // bit i = DO i (giá trị đã ghi)
     std::uint8_t input_count;
     std::uint8_t output_count;
+    std::uint8_t output_state;   // svc::SafeReason của nhóm DO: 0 = đang xuất, 1 = chưa arm, 3 = deadman...
 };
 
 struct OutputSetRequest {
     std::uint32_t mask;    // chỉ các bit này được ghi
     std::uint32_t value;
+};
+
+struct OutputArmRequest {
+    std::uint8_t arm;      // 1 = arm (cho phép xuất), 0 = disarm (mọi DO tắt, lệnh bị từ chối)
 };
 
 enum ImuFlags : std::uint8_t { kImuFresh = 1, kImuEverReceived = 2, kImuStartFailed = 4 };
@@ -112,6 +118,7 @@ struct StatusHeader {
 };
 
 static_assert(sizeof(IoStatus) <= core::cfg::kEventPayloadSize && sizeof(OutputSetRequest) <= core::cfg::kEventPayloadSize &&
+                  sizeof(OutputArmRequest) <= core::cfg::kEventPayloadSize &&
                   sizeof(LoopbackHeader) <= core::cfg::kEventPayloadSize,
               "bring-up inline payloads must fit the default event payload");
 

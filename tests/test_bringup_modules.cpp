@@ -8,6 +8,7 @@
 #include "io_bringup/io_bringup.hpp"
 #include "mavlink_dialect.hpp"
 #include "mocks.hpp"
+#include "services/digital_outputs.hpp"
 #include "osal/time.hpp"
 #include "gnss_bringup/gnss_bringup.hpp"
 #include "serial_bringup/serial_bringup.hpp"
@@ -334,16 +335,21 @@ TEST(io_bringup_outputs_and_inputs) {
     device::GpioInputBank ins;
     for (auto& p : o) outs.add(&p);
     for (auto& p : i) ins.add(&p);
-    app::IoBringup m(&ins, &outs);
+    svc::DigitalOutputs dout("do", outs);
+    dout.set_event_bus(&c.bus);
+    dout.write_safe_now();
+    app::IoBringup m(&ins, &dout);
     CHECK(core::is_ok(m.on_init(c.ctx)));
-    m.on_start();
+    m.on_start();                        // io.do_arm = 1: tự arm
+    CHECK(dout.armed() && c.has_text("outputs armed"));
     m.on_tick(1000);
     bu::IoStatus s{};
     CHECK(c.last(bu::kIoStatus, s) && s.input_count == 20 && s.output_count == 20 && s.inputs == 0);
+    CHECK_EQ(s.output_state, static_cast<std::uint8_t>(svc::SafeReason::NoCommand));
 
     m.on_event(msg::Event::make(bu::kOutputSetRequest, bu::OutputSetRequest{0x00C00, 0x00400}));
     CHECK(o[10].read() && !o[11].read());
-    CHECK(c.last(bu::kIoStatus, s) && s.outputs == 0x400u);
+    CHECK(c.last(bu::kIoStatus, s) && s.outputs == 0x400u && s.output_state == 0);
 
     const std::size_t n = c.rec.count(bu::kIoStatus);
     m.on_tick(1020);                     // không đổi, chưa tới chu kỳ báo cáo
@@ -354,6 +360,21 @@ TEST(io_bringup_outputs_and_inputs) {
 
     m.on_event(msg::Event::make(bu::kOutputSetRequest, bu::OutputSetRequest{1u << 25, 1u << 25}));   // kênh không có
     CHECK(c.has_text("output set"));
+
+    // Disarm (giao diện / CLI): mọi DO tắt, lệnh bị từ chối, người vận hành được báo
+    m.on_event(msg::Event::make(bu::kOutputArmRequest, bu::OutputArmRequest{0}));
+    CHECK(!dout.armed() && !o[10].read());
+    const msg::Event* safe = c.last_event(svc::evt::kOutputSafe);
+    CHECK(safe != nullptr);
+    if (safe != nullptr) m.on_event(*safe);
+    CHECK(c.has_text("outputs safe"));
+    CHECK(c.last(bu::kIoStatus, s) && s.outputs == 0 && s.output_state == static_cast<std::uint8_t>(svc::SafeReason::NotArmed));
+    m.on_event(msg::Event::make(bu::kOutputSetRequest, bu::OutputSetRequest{0x1, 0x1}));
+    CHECK(!o[0].read() && c.has_text("rejected"));
+    m.on_event(msg::Event::make(bu::kOutputArmRequest, bu::OutputArmRequest{1}));
+    m.on_event(msg::Event::make(bu::kOutputSetRequest, bu::OutputSetRequest{0x1, 0x1}));
+    CHECK(o[0].read());
+    dout.stop();
 }
 
 TEST(imu_bringup_reports_samples_and_failures) {

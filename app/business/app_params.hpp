@@ -26,6 +26,7 @@ inline constexpr svc::ParamId kGnssForward   = 0x1212;   // gnss.forward
 inline constexpr svc::ParamId kGnssBaud      = 0x1213;   // gnss.baud
 //   IoBringup: 0x1220..0x122F
 inline constexpr svc::ParamId kIoReportMs    = 0x1221;   // io.report_ms
+inline constexpr svc::ParamId kIoDoArm       = 0x1222;   // io.do_arm (tự arm DO khi khởi động)
 //   ImuBringup: 0x1230..0x123F
 inline constexpr svc::ParamId kImuRateHz     = 0x1231;   // imu.rate_hz
 inline constexpr svc::ParamId kImuTimeoutMs  = 0x1232;   // imu.timeout_ms

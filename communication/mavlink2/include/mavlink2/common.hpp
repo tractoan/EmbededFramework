@@ -25,6 +25,7 @@ enum : std::uint8_t {
 enum : std::uint16_t {
     MAV_CMD_DO_SET_RELAY = 181,
     MAV_CMD_PREFLIGHT_STORAGE = 245,
+    MAV_CMD_COMPONENT_ARM_DISARM = 400,
     MAV_CMD_REQUEST_MESSAGE = 512,
 };
 

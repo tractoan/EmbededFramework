@@ -19,6 +19,7 @@
 #include "device/digital_io.hpp"
 #include "device/hdlc_imu.hpp"
 #include "messaging/topic.hpp"
+#include "services/digital_outputs.hpp"
 #include "services/sensor_scheduler.hpp"
 #include "messaging/buffer_allocators.hpp"
 #include "services/logger.hpp"
@@ -46,6 +47,7 @@ constexpr osal::Priority kConsolePriority  = osal::Priority::Low;       // 4
 svc::SerialPortBank g_ports;
 device::GpioInputBank g_inputs;
 device::GpioOutputBank g_outputs;
+svc::DigitalOutputs g_do{"do", g_outputs, {hw::kOutputCommandTimeoutMs, nullptr}};   // DO = Output loại Actuator
 device::HdlcImu g_imu[hw::kImuCount];                     // driver (không thread)
 msg::Topic<device::ImuSample> g_imu_topic[hw::kImuCount];   // mẫu mới nhất: nhóm lấy mẫu -> ImuBringup
 svc::GnssReceiver g_gnss;   // dịch vụ máy thu GNSS trên cổng hw::kGnssPort
@@ -144,7 +146,7 @@ core::Status setup_gnss() {
 core::Status setup_modules(app::ModuleManager& modules) {
     static app::SerialBringup serial(app::SerialBringup::Config{&g_ports});
     static app::GnssBringup gnss(app::GnssBringup::Config{&g_gnss, &g_ports, hw::kGnssPort, hw::kGcsPort});
-    static app::IoBringup io(&g_inputs, &g_outputs);
+    static app::IoBringup io(&g_inputs, &g_do);
     static const app::ImuBringup::Channel imus[hw::kImuCount] = {{&g_imu[0], &g_imu_topic[0]}, {&g_imu[1], &g_imu_topic[1]}};
     static app::ImuBringup imu(imus, hw::kImuCount);
 
@@ -218,6 +220,8 @@ core::Status setup(app::ProductSetup& s) {
     core::Status st = setup_serial(s.board);
     if (!core::is_ok(st)) return st;
     setup_io(s.board);
+    st = s.outputs.add(&g_do);   // framework: an toàn lúc khởi động/tắt, giám sát, failsafe
+    if (!core::is_ok(st)) return st;
     st = setup_gnss();
     if (!core::is_ok(st)) return st;
     st = setup_imu(s);

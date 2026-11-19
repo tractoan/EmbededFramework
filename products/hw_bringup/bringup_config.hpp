@@ -27,6 +27,9 @@ inline constexpr std::int8_t kLoopbackPeer[kSerialCount] = {-1, -1, -1, -1, -1, 
 inline constexpr std::size_t kInputCount  = 20;
 inline constexpr std::size_t kOutputCount = 20;
 inline constexpr std::uint32_t kInputInvertMask = 0;   // bit = 1: kênh tích cực mức thấp
+// DO là một svc::Output loại Actuator. Deadman: DO tự tắt hết nếu không có lệnh output nào trong khoảng này
+// (giao diện phải gửi lặp OUTPUT_SET). 0 = tắt deadman: DO giữ mức đã đặt cho tới lệnh kế tiếp / disarm.
+inline constexpr std::uint32_t kOutputCommandTimeoutMs = 0;
 
 // ---------------------------------------------------------------- IMU (SDLC/HDLC)
 inline constexpr std::size_t kImuCount = 2;

@@ -9,7 +9,7 @@ Firmware chạy trên **CPU nhúng (Linux)** để kiểm tra bo mạch, báo k�
 | 12 cổng serial RS232/RS485 | cổng `kGcsPort` (0) = phần mềm giao diện; cổng `kGnssPort` (1) = máy thu GNSS; 10 cổng còn lại: loopback liên tục |
 | Máy thu GNSS | trong `gnss.detect_ms` (5 s) sau khởi động: có byte nào → **CONNECTED** (chuyển tiếp dữ liệu lên giao diện, nhận lệnh cấu hình); không có → **ABSENT**, cổng chuyển sang kiểm tra loopback |
 | 20 digital input | đọc 20 ms/lần, báo khi thay đổi + định kỳ `io.report_ms` |
-| 20 digital output | đặt theo lệnh từ giao diện (trạng thái an toàn lúc khởi động: tắt hết) |
+| 20 digital output | đặt theo lệnh từ giao diện; là **một** `svc::Output` loại Actuator (`svc::DigitalOutputs`): tắt hết lúc khởi động/tắt máy và khi disarm; tự arm khi khởi động (`io.do_arm`), arm/disarm từ giao diện |
 | 2 IMU SDLC/HDLC | đọc từng khung, giải mã theo bảng định dạng (`ln200`, `hg1700`), đếm khung/lỗi, đo tần số, gửi `imu.rate_hz` |
 
 ## Kiến trúc (theo các lớp của framework)
@@ -24,6 +24,7 @@ Firmware chạy trên **CPU nhúng (Linux)** để kiểm tra bo mạch, báo k�
  services              SerialPortBank (thread/cổng: Loopback|Stream|External) · GnssReceiver (thread: NMEA, fix, gửi lệnh)
                        · SensorScheduler của framework: mỗi IMU một nhóm Blocking (thread imu0/imu1) -> msg::Topic
                        (CƠ CHẾ, không biết khái niệm bring-up)
+ services (framework)  DigitalOutputs: nhóm DO = một Output loại Actuator (an toàn, arm, deadman; OutputHub giám sát)
  platform/device       GpioInput/OutputBank (DI/DO) · HdlcImu (đọc khung chặn, không thread) · ImuFormat + decode_imu_frame
                        (giải mã theo bảng) · NmeaParser (GGA/RMC)
  platform/hal          IBoard::serial(i) / digital_input(i) / digital_output(i) / hdlc(i) · IHdlcPort
@@ -41,9 +42,9 @@ Luồng: thread cổng/IMU → service (atomic, ring buffer) → module (thread 
   `Event::buffer` lấy từ **pool tĩnh** khai báo ở `setup_buffers()` (64 B×32, 128 B×64, 256 B×16, 1024 B×16);
   payload inline giữ mặc định 16 B. Hết pool → gói đó bị bỏ và được đếm (`sys buffers`, `gnss`).
   Bộ đệm của phần cứng mô phỏng và port `linux_cpu` cũng là mảng cố định.
-- **Stack**: 19 task lấy stack từ vùng tĩnh `EP_CFG_STACK_POOL_BYTES` = 56 KB (dùng ~47 KB), `EP_CFG_MAX_THREADS` = 24.
+- **Stack**: 20 task lấy stack từ vùng tĩnh `EP_CFG_STACK_POOL_BYTES` = 56 KB (dùng ~48 KB), `EP_CFG_MAX_THREADS` = 24.
 - **Priority** (0..15, `product.cpp`): IMU 12 · cổng GNSS + dịch vụ `gnss` 10 · kênh giao diện (serial + UDP) 9 · nghiệp vụ `app` 8 · cổng loopback 5 ·
-  console 4 · LED 4. Xem lúc chạy: `sys tasks`. Trên target `linux_cpu` priority là SCHED_FIFO thật
+  console 4 · LED 4 · giám sát output `out_sup` 15 (Realtime, của framework, có vì DO là actuator). Xem lúc chạy: `sys tasks`. Trên target `linux_cpu` priority là SCHED_FIFO thật
   (`EP_POSIX_REALTIME`; cần root hoặc `setcap cap_sys_nice+ep firmware`, không có quyền thì chạy SCHED_OTHER).
 
 > Framework có hai giao thức MAVLink: `communication/mavlink/` (v1, bảng ánh xạ telemetry `NAMED_VALUE_FLOAT`, dùng bởi
@@ -69,7 +70,7 @@ Thêm bản tin: sửa XML → thêm struct ở `dialects/bringup/.../messages.h
 |---|---|---|
 | ↑ | `BRINGUP_STATUS` (62000) 1 Hz | trạng thái GNSS (DETECTING/CONNECTED/ABSENT), byte rx/tx, baudrate, cổng GCS/GNSS |
 | ↑ | `SERIAL_LOOPBACK_STATUS` (62001) `ser.report_ms` | `ok_mask`, `tested_mask`, vai trò + kết quả + số lần pass/fail từng cổng |
-| ↑ | `IO_STATUS` (62002) | `input_mask`, `output_mask` (khi input đổi, sau mỗi lệnh output, định kỳ) |
+| ↑ | `IO_STATUS` (62002) | `input_mask`, `output_mask`, `output_state` (mở rộng v2: 0 active, 1 chưa arm, 2 đã arm chờ lệnh, 3 deadman…) – khi input đổi, sau mỗi lệnh output / arm, định kỳ |
 | ↑ | `IMU_DATA` (62004) `imu.rate_hz` | gyro rad/s, accel m/s², tần số, số khung/lỗi, cờ, 48 byte khung thô |
 | ↑ | `GNSS_FIX` (62005), mỗi chu kỳ đo | firmware giải mã NMEA: giờ UTC trong ngày + ngày (+ thời gian UNIX), lat/lon (degE7), độ cao, HDOP, tốc độ, hướng, chất lượng fix, số vệ tinh, cờ hợp lệ |
 | ↑ | `GPS_RAW_INT` (24, chuẩn), cùng lúc | cùng dữ liệu theo bản tin chuẩn (QGroundControl/công cụ MAVLink hiển thị được ngay) |
@@ -77,6 +78,7 @@ Thêm bản tin: sửa XML → thêm struct ở `dialects/bringup/.../messages.h
 | ↑ | `STATUSTEXT` | sự kiện: GNSS phát hiện/vắng, cổng PASS↔FAIL, IMU mất/có dữ liệu |
 | ↓ | `OUTPUT_SET` (62003) | `out = (out & ~mask) \| (value & mask)` → trả `IO_STATUS` |
 | ↓ | `COMMAND_LONG` `MAV_CMD_DO_SET_RELAY` | param1 = kênh output, param2 = 0/1 |
+| ↓ | `COMMAND_LONG` `MAV_CMD_COMPONENT_ARM_DISARM` | param1 = 1 arm / 0 disarm nhóm DO (disarm → mọi DO tắt; lệnh output khi chưa arm bị từ chối + `STATUSTEXT`) |
 | ↓ | `SERIAL_CONTROL` (device=GPS1) | lệnh cấu hình gửi tới máy thu (`data[count]`); `baudrate`≠0 → đổi tốc độ cổng GNSS trước |
 | ↓↑ | `PARAM_REQUEST_LIST/READ`, `PARAM_SET` → `PARAM_VALUE` | tham số (kiểu INT32, mã hóa C-cast) |
 | ↓ | `COMMAND_LONG` `MAV_CMD_PREFLIGHT_STORAGE` | param1: 0 đọc NV, 1 lưu NV, 2 mặc định |
@@ -95,6 +97,7 @@ nghiệp vụ); hàng đợi đầy -> bỏ và báo. Xem `gnss` (`tx_dropped`).
 | `gnss.baud` | 115200 | baudrate cổng máy thu |
 | `gnss.forward` | 1 | chuyển tiếp dữ liệu máy thu lên giao diện |
 | `io.report_ms` | 200 | chu kỳ `IO_STATUS` khi không đổi |
+| `io.do_arm` | 1 | tự arm DO khi khởi động (0: giao diện phải gửi `MAV_CMD_COMPONENT_ARM_DISARM` trước khi đặt output) |
 | `imu.rate_hz` / `imu.timeout_ms` | 10 / 500 | tần số gửi `IMU_DATA` / ngưỡng báo mất dữ liệu |
 | `comm.console`, `comm.gcs`, `comm.gcs_udp` | cli, mavlink, mavlink | giao thức trên từng kênh (`link set gcs cli` để dùng terminal trên cổng giao diện) |
 
@@ -202,14 +205,15 @@ Biên dịch chéo ARM64: thêm `-DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64
 Chạy như dịch vụ: `deploy/ep-bringup.service`.
 
 Công cụ `tools/mavlink/bringup_gcs.py` (chỉ cần Python 3; `pyserial` khi dùng cổng COM) cũng là mẫu cho phần mềm giao diện:
-`monitor`, `gnss-fix`, `output <kênh> <0|1>`, `outputs <hex>`, `relay`, `gnss "<lệnh>" [--gnss-baud B]`, `params`, `param-set`, `save`.
+`monitor`, `gnss-fix`, `output <kênh> <0|1>`, `outputs <hex>`, `relay`, `arm`, `disarm`, `gnss "<lệnh>" [--gnss-baud B]`, `params`, `param-set`, `save`.
 
 ### Lệnh CLI trên console
 
 ```
 serial [reset]               bảng vai trò / kết quả loopback / byte từng cổng
 gnss [send <text> | baud <bps>]  trạng thái máy thu, gửi lệnh (tự thêm CR LF)
-io [set <ch> <0|1> | out <hex> | all <0|1>]   DI/DO
+io [set <ch> <0|1> | out <hex> | all <0|1> | arm | disarm]   DI/DO (+ trạng thái arm)
+sys outputs                  output của framework (LED, do): loại, arm, lý do an toàn, đếm lệnh/từ chối
 imu                          thống kê khung, mẫu cuối, khung thô
 link list | set gcs <mavlink|cli|auto>
 sys tasks | buffers           task (priority, stack), pool buffer
@@ -218,7 +222,7 @@ param list | set <n> <v> | save
 
 ## Cấu hình phần cứng
 
-- Chỉ số cổng & chức năng: `bringup_config.hpp` (cổng GCS/GNSS, baudrate, cặp loopback, invert DI, định dạng + cấu hình HDLC của IMU).
+- Chỉ số cổng & chức năng: `bringup_config.hpp` (cổng GCS/GNSS, baudrate, cặp loopback, invert DI, deadman DO `kOutputCommandTimeoutMs` (0 = tắt), định dạng + cấu hình HDLC của IMU).
 - Thiết bị Linux tương ứng: `platform/hal/ports/linux_cpu/board_config.hpp`, ghi đè lúc chạy bằng `EP_BOARD_CONF` hoặc `EP_SERIAL<i>`, `EP_DI<i>`,
   `EP_DO<i>`, `EP_HDLC<i>`, `EP_NVRAM` (ví dụ: `deploy/ep_board.conf.example`).
 - GPIO: Linux GPIO character device, uAPI **v2** (kernel >= 5.10) hoặc tự lùi về **v1** (kernel >= 4.8) khi header/kernel

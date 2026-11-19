@@ -77,7 +77,9 @@
 | DIO-01 | Đọc 20 input, gửi trạng thái lên GUI. | đọc mỗi 20 ms; gửi khi đổi + mỗi `io.report_ms` = 200 ms | Đã làm |
 | DIO-02 | GUI đặt được 20 output (từng kênh hoặc nhiều kênh một lúc). | `OUTPUT_SET` (mask/value), `MAV_CMD_DO_SET_RELAY` | Đã làm |
 | DIO-03 | Sau mỗi lệnh output, gửi lại trạng thái input/output ngay. | `IO_STATUS` | Đã làm |
-| DIO-04 | Trạng thái an toàn khi khởi động: tắt mọi output. | tắt hết | Đã làm |
+| DIO-04 | Trạng thái an toàn khi khởi động: tắt mọi output. | tắt hết (và khi tắt máy / disarm / deadman) | Đã làm |
+| DIO-08 | DO phải được **arm** mới xuất; GUI arm/disarm được; disarm → tắt mọi DO, lệnh output bị từ chối và báo. | tự arm khi khởi động (`io.do_arm` = 1); `MAV_CMD_COMPONENT_ARM_DISARM`; trạng thái trong `IO_STATUS.output_state` | Đã làm |
+| DIO-09 | Deadman: không có lệnh output trong T ms → tắt mọi DO (GUI phải gửi lặp lệnh). | tắt (`kOutputCommandTimeoutMs` = 0) | Đã làm |
 | DIO-05 | Input tích cực mức thấp cấu hình được theo kênh. | không kênh nào đảo | Đã làm |
 | DIO-06 | _(vd. tự động thử DO→DI bằng jig, chạy lần lượt từng kênh và báo kết quả?)_ | | Chờ |
 | DIO-07 | _(vd. chống dội (debounce) input? bao nhiêu ms?)_ | không có | Chờ |
@@ -112,6 +114,7 @@
 | MAV-07 | Nhận xuống: thiết lập output. | `OUTPUT_SET`, `MAV_CMD_DO_SET_RELAY` | Đã làm |
 | MAV-08 | Nhận xuống: lệnh cấu hình máy thu GNSS. | `SERIAL_CONTROL` (GPS1) | Đã làm |
 | MAV-09 | Đọc/ghi/lưu tham số từ GUI. | `PARAM_*`, `MAV_CMD_PREFLIGHT_STORAGE` | Đã làm |
+| MAV-10 | Nhận xuống: arm/disarm output. | `COMMAND_LONG` `MAV_CMD_COMPONENT_ARM_DISARM` (param1 = 1/0) | Đã làm |
 | MAV-10 | Phát hiện mất kết nối GUI. | không thấy heartbeat GUI 3 s | Đã làm |
 | MAV-12 | GUI kết nối được qua mạng (UDP) ngoài cổng serial, khi CPU có Ethernet. | UDP 14560, trả lời địa chỉ gửi gần nhất | Đã làm |
 | MAV-11 | _(vd. GUI cần lệnh bắt đầu/dừng kiểm tra, reset bộ đếm, xuất báo cáo PASS/FAIL tổng?)_ | | Chờ |
@@ -166,6 +169,7 @@
 | 2026-11-13 | | Cập nhật theo main (Nios II, PR #9): các mã framework của nhánh bị trùng được đánh số lại – SRC-18…21, HAL-017…020, TGT-008, VER-013/014, PLN-013/014. Không đổi yêu cầu. |
 | 2026-11-13 | | Cập nhật theo main (đặc tả yêu cầu framework `docs/REQUIREMENTS.md`): bổ sung các yêu cầu tầng framework của nhánh (HAL-017…020, DEV-003…006, SVC-008/009, COMM-008/009, TGT-008, PROD-005…007, DEF-011…016). |
 | 2026-11-19 | | Cập nhật theo main (PR #10, gộp output): `CommandOutput` → `CommandReply` trong các module bring-up; LED là output loại Indicator (`sys outputs`); mã framework của nhánh bị trùng được đánh số lại – SRC-19…22, DD-09/10. DO vẫn chưa chuyển sang `Output<Cmd>` (cần quyết định arm/deadman, PLN-013). Không đổi yêu cầu. |
+| 2026-11-19 | | DIO-08, DIO-09, MAV-10: DO chuyển sang cơ chế output của framework (`svc::DigitalOutputs`, `Output` loại Actuator): an toàn lúc khởi động/tắt, arm/disarm từ GUI (`MAV_CMD_COMPONENT_ARM_DISARM`, CLI `io arm|disarm`), tự arm khi khởi động (`io.do_arm`), deadman tùy chọn (mặc định tắt); `IO_STATUS` thêm trường mở rộng `output_state`. Thêm 1 thread giám sát output (`out_sup`). |
 | | | |
 
 ---

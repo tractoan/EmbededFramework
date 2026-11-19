@@ -76,6 +76,7 @@ void BringupDialect::on_event(const msg::Event& e, Sender& tx) {
             m.output_mask  = s.outputs;
             m.input_count  = s.input_count;
             m.output_count = s.output_count;
+            m.output_state = s.output_state;
             tx.send(m);
             return;
         }
@@ -182,6 +183,11 @@ std::uint8_t BringupDialect::on_command(const CommandLong& c, comm::Services& s,
         if (ch < 0 || ch > 31) return MAV_RESULT_DENIED;
         const std::uint32_t bit = 1u << ch;
         s.bus.publish(msg::Event::make(bu::kOutputSetRequest, bu::OutputSetRequest{bit, c.param[1] >= 0.5f ? bit : 0u}));
+        return MAV_RESULT_ACCEPTED;
+    }
+    if (c.command == MAV_CMD_COMPONENT_ARM_DISARM) {   // param1 = 1 arm / 0 disarm nhóm DO
+        const std::uint8_t arm = c.param[0] >= 0.5f ? 1 : 0;
+        s.bus.publish(msg::Event::make(bu::kOutputArmRequest, bu::OutputArmRequest{arm}));
         return MAV_RESULT_ACCEPTED;
     }
     return MAV_RESULT_UNSUPPORTED;

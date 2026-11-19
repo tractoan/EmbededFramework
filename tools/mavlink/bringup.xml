@@ -12,6 +12,7 @@
     STATUSTEXT (sự kiện), HEARTBEAT (1 Hz).
   Giao diện -> firmware:
     OUTPUT_SET, COMMAND_LONG(MAV_CMD_DO_SET_RELAY: param1=kênh, param2=0/1),
+    COMMAND_LONG(MAV_CMD_COMPONENT_ARM_DISARM: param1=1 arm / 0 disarm nhóm DO; chưa arm -> OUTPUT_SET bị từ chối),
     SERIAL_CONTROL [device=GPS1] (lệnh cấu hình gửi tới máy thu; baudrate != 0 -> đổi tốc độ cổng),
     PARAM_REQUEST_LIST / PARAM_SET, COMMAND_LONG(MAV_CMD_PREFLIGHT_STORAGE: param1=1 lưu tham số).
 -->
@@ -49,6 +50,14 @@
       <entry value="2" name="BRINGUP_IMU_FLAGS_EVER_RECEIVED"><description>Sample fields hold the last valid frame.</description></entry>
       <entry value="4" name="BRINGUP_IMU_FLAGS_START_FAILED"><description>The SDLC/HDLC port could not be opened.</description></entry>
     </enum>
+    <enum name="BRINGUP_OUTPUT_STATE">
+      <entry value="0" name="BRINGUP_OUTPUT_STATE_ACTIVE"><description>Armed: outputs follow OUTPUT_SET / DO_SET_RELAY.</description></entry>
+      <entry value="1" name="BRINGUP_OUTPUT_STATE_NOT_ARMED"><description>Disarmed: all outputs off, commands rejected (MAV_CMD_COMPONENT_ARM_DISARM param1=1 to arm).</description></entry>
+      <entry value="2" name="BRINGUP_OUTPUT_STATE_NO_COMMAND"><description>Armed, waiting for the first command (all outputs off).</description></entry>
+      <entry value="3" name="BRINGUP_OUTPUT_STATE_COMMAND_TIMEOUT"><description>Deadman expired: all outputs off until the next command.</description></entry>
+      <entry value="4" name="BRINGUP_OUTPUT_STATE_STALLED"><description>Forced safe by the supervisor: arm again.</description></entry>
+      <entry value="5" name="BRINGUP_OUTPUT_STATE_SHUTDOWN"><description>Firmware is stopping.</description></entry>
+    </enum>
   </enums>
   <messages>
     <message id="62000" name="BRINGUP_STATUS">
@@ -79,6 +88,8 @@
       <field type="uint32_t" name="output_mask">Bit i: commanded level of digital output i.</field>
       <field type="uint8_t" name="input_count">Number of digital inputs.</field>
       <field type="uint8_t" name="output_count">Number of digital outputs.</field>
+      <extensions/>
+      <field type="uint8_t" name="output_state" enum="BRINGUP_OUTPUT_STATE">State of the digital output group (outputs are all off unless ACTIVE).</field>
     </message>
     <message id="62003" name="OUTPUT_SET">
       <description>Set digital outputs: out = (out AND NOT mask) OR (value AND mask). Answered by IO_STATUS.</description>

@@ -5,6 +5,7 @@
 #include "device/digital_io.hpp"
 #include "device/hdlc_imu.hpp"
 #include "messaging/topic.hpp"
+#include "services/digital_outputs.hpp"
 #include "services/sensor_scheduler.hpp"
 #include "services/serial_port_bank.hpp"
 #include "test_framework.hpp"
@@ -270,4 +271,42 @@ TEST(digital_io_banks) {
     CHECK_EQ(in.read(), 0x2u);
     in.set_invert_mask(0x3);
     CHECK_EQ(in.read(), 0x1u);
+}
+
+TEST(digital_outputs_is_a_safe_actuator) {
+    mock::Gpio o[20];
+    device::GpioOutputBank bank;
+    for (auto& p : o) bank.add(&p);
+    g_fake_ms = 1000;
+    svc::DigitalOutputs dout("do", bank, {100, &fake_clock});   // deadman 100 ms
+    CHECK(dout.output_class() == svc::OutputClass::Actuator && !dout.threaded() && dout.needs_supervision());
+    CHECK_EQ(dout.all_mask(), 0xFFFFFu);
+
+    bank.write(0xFFFFF, 0x3);            // mức bất kỳ trước khi khởi động
+    dout.write_safe_now();               // OutputHub làm ngay sau product::setup()
+    CHECK_EQ(dout.state(), 0u);
+    CHECK(dout.set(0x1, 0x1) == core::Status::Busy);   // chưa arm: từ chối, không ghi
+    CHECK(!o[0].read() && dout.status().rejected == 1);
+
+    dout.arm();
+    CHECK(dout.reason() == svc::SafeReason::NoCommand);
+    CHECK(core::is_ok(dout.set(0x00C00, 0x00400)));    // chỉ các bit trong mask
+    CHECK(o[10].read() && !o[11].read() && dout.reason() == svc::SafeReason::None);
+    CHECK(core::is_ok(dout.set(0x1, 0xFFFFFFFF)));     // value ngoài mask bị bỏ
+    CHECK_EQ(dout.state(), 0x401u);
+    CHECK(dout.set(1u << 20, 1u << 20) == core::Status::InvalidArg);   // kênh không có
+    CHECK(dout.set(0, 0) == core::Status::InvalidArg);
+
+    g_fake_ms += 50;
+    dout.supervise(g_fake_ms);
+    CHECK_EQ(dout.state(), 0x401u);      // còn trong hạn deadman
+    g_fake_ms += 60;
+    dout.supervise(g_fake_ms);           // quá 100 ms không có lệnh -> mọi DO tắt
+    CHECK(dout.state() == 0u && dout.reason() == svc::SafeReason::CommandTimeout);
+    CHECK(core::is_ok(dout.set(0x2, 0x2)));            // lệnh mới -> xuất lại
+    CHECK(dout.state() == 0x2u && dout.reason() == svc::SafeReason::None);
+
+    dout.disarm();                       // failsafe / người vận hành
+    CHECK(dout.state() == 0u && dout.set(0x2, 0x2) == core::Status::Busy);
+    dout.stop();
 }

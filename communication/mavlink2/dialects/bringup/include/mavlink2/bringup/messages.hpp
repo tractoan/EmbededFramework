@@ -52,14 +52,16 @@ struct SerialLoopbackStatus {
 struct IoStatus {
     static constexpr std::uint32_t kId = 62002;
     static constexpr std::uint8_t kCrcExtra = 0;
-    static constexpr std::size_t kLen = 14;
+    static constexpr std::size_t kLen = 15;   // 14 + phần mở rộng (extensions: không tính vào crc_extra)
     std::uint32_t time_boot_ms = 0, input_mask = 0, output_mask = 0;
     std::uint8_t input_count = 0, output_count = 0;
+    std::uint8_t output_state = 0;   // extension: BRINGUP_OUTPUT_STATE
     void pack(std::uint8_t* p) const {
         put_u32(p, 0, time_boot_ms);
         put_u32(p, 4, input_mask);
         put_u32(p, 8, output_mask);
         p[12] = input_count; p[13] = output_count;
+        p[14] = output_state;
     }
 };
 
