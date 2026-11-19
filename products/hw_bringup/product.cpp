@@ -24,6 +24,7 @@
 #include "messaging/buffer_allocators.hpp"
 #include "services/logger.hpp"
 #include "services/serial_port_bank.hpp"
+#include "services/serial_stream_port.hpp"
 
 #if EP_HAS_NET
 #include "comm/net_streams.hpp"
@@ -50,7 +51,11 @@ device::GpioOutputBank g_outputs;
 svc::DigitalOutputs g_do{"do", g_outputs, {hw::kOutputCommandTimeoutMs, nullptr}};   // DO = Output loại Actuator
 device::HdlcImu g_imu[hw::kImuCount];                     // driver (không thread)
 msg::Topic<device::ImuSample> g_imu_topic[hw::kImuCount];   // mẫu mới nhất: nhóm lấy mẫu -> ImuBringup
-svc::GnssReceiver g_gnss;   // dịch vụ máy thu GNSS trên cổng hw::kGnssPort
+// GNSS = một cảm biến của framework: cổng Stream của dãy cổng -> SerialStreamPort (IUart + tap thô)
+// -> StreamSensorTask<NmeaFixParser> (nhóm SensorScheduler riêng, thread "gnss") -> Topic<GnssFix>.
+svc::SerialStreamPort g_gnss_port{g_ports, static_cast<std::size_t>(hw::kGnssPort < 0 ? 0 : hw::kGnssPort)};
+device::NmeaFixParser g_nmea;
+msg::Topic<device::GnssFix> g_gnss_topic;
 
 core::Status setup_serial(hal::IBoard& board) {
     static char names[hw::kSerialCount][8];
@@ -132,20 +137,23 @@ void setup_tasks(app::TaskPlan& t) {
     t.leds = osal::ThreadConfig{"led", osal::Priority::Low, 1024, nullptr};
 }
 
-// Dịch vụ GNSS: thread "gnss" cùng mức ưu tiên với cổng GNSS (đọc/giải mã + gửi lệnh cấu hình).
-core::Status setup_gnss() {
+// GNSS: nhóm cảm biến chặn riêng (thread "gnss", cùng mức ưu tiên với cổng GNSS). Mỗi lần chờ tối đa
+// kGnssReadTimeoutMs một fix; 3 lần liên tiếp không có -> kSensorFault ("sys sensors"). Lệnh tới máy thu do
+// worker "gnss_tx" của GnssBringup ghi. Không có máy thu: cổng chuyển Loopback, task trả về ngay và nghỉ.
+core::Status setup_gnss(app::ProductSetup& s) {
     if (hw::kGnssPort < 0) return core::Status::Ok;
-    svc::GnssReceiver::Config c;
-    c.ports    = &g_ports;
-    c.port     = static_cast<std::size_t>(hw::kGnssPort);
-    c.baudrate = 115200;   // GnssBringup khởi động với tham số gnss.baud
-    c.task     = osal::ThreadConfig{"gnss", kGnssPortPriority, 2048, nullptr};
-    return g_gnss.init(c);
+    using GnssTask = svc::StreamSensorTask<device::NmeaFixParser, device::GnssFix>;
+    static GnssTask task{"gnss", g_gnss_port, g_nmea, g_gnss_topic, hw::kGnssReadTimeoutMs};
+    static svc::SensorScheduler group;
+    core::Status st = group.add(&task);
+    if (core::is_ok(st)) st = s.sensors.add(&group, osal::ThreadConfig{"gnss", kGnssPortPriority, 2048, nullptr});
+    return st;
 }
 
 core::Status setup_modules(app::ModuleManager& modules) {
     static app::SerialBringup serial(app::SerialBringup::Config{&g_ports});
-    static app::GnssBringup gnss(app::GnssBringup::Config{&g_gnss, &g_ports, hw::kGnssPort, hw::kGcsPort});
+    static app::GnssBringup gnss(
+        app::GnssBringup::Config{&g_ports, hw::kGnssPort, hw::kGcsPort, &g_gnss_port, &g_gnss_topic, &g_nmea});
     static app::IoBringup io(&g_inputs, &g_do);
     static const app::ImuBringup::Channel imus[hw::kImuCount] = {{&g_imu[0], &g_imu_topic[0]}, {&g_imu[1], &g_imu_topic[1]}};
     static app::ImuBringup imu(imus, hw::kImuCount);
@@ -222,7 +230,7 @@ core::Status setup(app::ProductSetup& s) {
     setup_io(s.board);
     st = s.outputs.add(&g_do);   // framework: an toàn lúc khởi động/tắt, giám sát, failsafe
     if (!core::is_ok(st)) return st;
-    st = setup_gnss();
+    st = setup_gnss(s);
     if (!core::is_ok(st)) return st;
     st = setup_imu(s);
     if (!core::is_ok(st)) return st;

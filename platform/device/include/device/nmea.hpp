@@ -2,6 +2,7 @@
 // Bộ giải mã NMEA 0183 cho máy thu GNSS: hàm thuần (không thread, không heap, không phụ thuộc OS),
 // nhận từng byte, ghép câu "$....*hh\r\n", kiểm tra checksum, giải mã GGA và RMC của mọi talker
 // (GP, GN, GL, GA, GB/BD...). Toạ độ/thời gian dùng số nguyên (không cần FPU).
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
@@ -58,8 +59,9 @@ public:
     }
 
     const GnssFix& fix() const { return fix_; }   // trạng thái tổng hợp từ các câu gần nhất
-    std::uint32_t sentences() const { return sentences_; }       // câu đúng checksum
-    std::uint32_t checksum_errors() const { return checksum_errors_; }
+    // Bộ đếm đọc được từ thread khác (CLI, báo cáo) trong khi thread lấy mẫu đang nạp byte.
+    std::uint32_t sentences() const { return sentences_.load(std::memory_order_relaxed); }   // câu đúng checksum
+    std::uint32_t checksum_errors() const { return checksum_errors_.load(std::memory_order_relaxed); }
     void reset();
 
 private:
@@ -71,7 +73,7 @@ private:
     std::size_t len_    = 0;
     bool in_sentence_   = false;
     GnssFix fix_ = GnssFix::empty();
-    std::uint32_t sentences_ = 0, checksum_errors_ = 0;
+    std::atomic<std::uint32_t> sentences_{0}, checksum_errors_{0};
 };
 
 // Gom các câu NMEA thành MỘT fix mỗi chu kỳ đo (epoch) – dạng Parser của svc::StreamSensorTask:
@@ -89,7 +91,7 @@ public:
     bool feed(std::uint8_t byte, GnssFix& out);
     NmeaParser::Result last_result() const { return last_; }   // kết quả câu vừa kết thúc (chẩn đoán)
     const NmeaParser& nmea() const { return p_; }             // số câu, lỗi checksum, fix tổng hợp
-    std::uint32_t fixes() const { return fixes_; }
+    std::uint32_t fixes() const { return fixes_.load(std::memory_order_relaxed); }   // đọc được từ thread khác
     void reset();
 
 private:
@@ -97,7 +99,7 @@ private:
     NmeaParser::Result last_ = NmeaParser::Result::None;
     bool seen_gga_            = false;
     std::uint8_t rmc_since_gga_ = 0;
-    std::uint32_t fixes_      = 0;
+    std::atomic<std::uint32_t> fixes_{0};
 };
 
 // Các hàm giải mã trường (public để test). Trả false nếu trường rỗng/sai.

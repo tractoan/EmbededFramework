@@ -9,6 +9,6 @@ add_library(ep_services STATIC
   src/sensor_scheduler.cpp
   src/output.cpp
   src/serial_port_bank.cpp   # nhiều cổng serial: loopback / stream (thread mỗi cổng)
-  src/gnss_receiver.cpp)     # máy thu GNSS: thread đọc/giải mã NMEA, gửi lệnh
+  src/serial_stream_port.cpp)   # IUart trên cổng Stream của SerialPortBank (vd. GNSS qua StreamSensorTask)
 target_include_directories(ep_services PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(ep_services PUBLIC ep_messaging ep_device)

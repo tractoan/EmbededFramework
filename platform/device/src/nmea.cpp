@@ -150,7 +150,7 @@ bool NmeaFixParser::feed(std::uint8_t byte, GnssFix& out) {
     }
     if (emit) {
         out = p_.fix();
-        ++fixes_;
+        fixes_.fetch_add(1, std::memory_order_relaxed);
     }
     return emit;
 }
@@ -196,10 +196,10 @@ NmeaParser::Result NmeaParser::finish() {
     std::uint8_t cs = 0;
     for (const char* p = line_; p < star; ++p) cs = static_cast<std::uint8_t>(cs ^ static_cast<std::uint8_t>(*p));
     if (cs != static_cast<std::uint8_t>(hi * 16 + lo)) {
-        ++checksum_errors_;
+        checksum_errors_.fetch_add(1, std::memory_order_relaxed);
         return Result::ChecksumError;
     }
-    ++sentences_;
+    sentences_.fetch_add(1, std::memory_order_relaxed);
     *star = '\0';
 
     // Tách trường tại chỗ (trường rỗng -> chuỗi rỗng)

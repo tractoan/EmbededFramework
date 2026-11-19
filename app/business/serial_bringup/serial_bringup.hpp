@@ -1,7 +1,7 @@
 #pragma once
 // Bring-up dãy cổng serial (kiểm tra loopback):
 //  - cổng ở chế độ External = cổng của phần mềm giao diện (kênh MAVLink sở hữu) -> chỉ báo vai trò
-//  - cổng ở chế độ Stream = cổng máy thu GNSS (do GnssBringup + svc::GnssReceiver quản lý) -> chỉ báo vai trò;
+//  - cổng ở chế độ Stream = cổng máy thu GNSS (do GnssBringup + nhóm cảm biến GNSS quản lý) -> chỉ báo vai trò;
 //    khi không có máy thu, GnssBringup chuyển cổng đó sang Loopback và nó được thử như các cổng khác
 //  - các cổng Loopback: thử liên tục, báo kLoopbackStatus, thông báo khi một cổng đổi PASS <-> FAIL
 #include "app/module.hpp"

@@ -21,8 +21,9 @@ Firmware chạy trên **CPU nhúng (Linux)** để kiểm tra bo mạch, báo k�
  communication/mavlink2 Mavlink2Protocol: khung v2 (+nhận v1), heartbeat, PARAM_* <-> ParamStore, COMMAND_LONG/ACK, IDialect
    dialects/bringup    định nghĩa bản tin 62000..62005 trên dây (struct, offset, CRC_EXTRA) – không phụ thuộc nghiệp vụ
  communication/net     UdpStream: kênh MAVLink thứ hai qua mạng (khi target có TCP/IP)
- services              SerialPortBank (thread/cổng: Loopback|Stream|External) · GnssReceiver (thread: NMEA, fix, gửi lệnh)
-                       · SensorScheduler của framework: mỗi IMU một nhóm Blocking (thread imu0/imu1) -> msg::Topic
+ services              SerialPortBank (thread/cổng: Loopback|Stream|External) · SerialStreamPort (IUart trên cổng Stream)
+                       · SensorScheduler của framework: mỗi IMU một nhóm Blocking (thread imu0/imu1), GNSS một nhóm
+                         StreamSensorTask + NmeaFixParser (thread gnss) -> msg::Topic
                        (CƠ CHẾ, không biết khái niệm bring-up)
  services (framework)  DigitalOutputs: nhóm DO = một Output loại Actuator (an toàn, arm, deadman; OutputHub giám sát)
  platform/device       GpioInput/OutputBank (DI/DO) · HdlcImu (đọc khung chặn, không thread) · ImuFormat + decode_imu_frame
@@ -42,8 +43,8 @@ Luồng: thread cổng/IMU → service (atomic, ring buffer) → module (thread 
   `Event::buffer` lấy từ **pool tĩnh** khai báo ở `setup_buffers()` (64 B×32, 128 B×64, 256 B×16, 1024 B×16);
   payload inline giữ mặc định 16 B. Hết pool → gói đó bị bỏ và được đếm (`sys buffers`, `gnss`).
   Bộ đệm của phần cứng mô phỏng và port `linux_cpu` cũng là mảng cố định.
-- **Stack**: 20 task lấy stack từ vùng tĩnh `EP_CFG_STACK_POOL_BYTES` = 56 KB (dùng ~48 KB), `EP_CFG_MAX_THREADS` = 24.
-- **Priority** (0..15, `product.cpp`): IMU 12 · cổng GNSS + dịch vụ `gnss` 10 · kênh giao diện (serial + UDP) 9 · nghiệp vụ `app` 8 · cổng loopback 5 ·
+- **Stack**: 21 task lấy stack từ vùng tĩnh `EP_CFG_STACK_POOL_BYTES` = 56 KB (dùng 50 KB), `EP_CFG_MAX_THREADS` = 24.
+- **Priority** (0..15, `product.cpp`): IMU 12 · cổng GNSS + cảm biến `gnss` + worker `gnss_tx` 10 · kênh giao diện (serial + UDP) 9 · nghiệp vụ `app` 8 · cổng loopback 5 ·
   console 4 · LED 4 · giám sát output `out_sup` 15 (Realtime, của framework, có vì DO là actuator). Xem lúc chạy: `sys tasks`. Trên target `linux_cpu` priority là SCHED_FIFO thật
   (`EP_POSIX_REALTIME`; cần root hoặc `setcap cap_sys_nice+ep firmware`, không có quyền thì chạy SCHED_OTHER).
 
@@ -84,8 +85,8 @@ Thêm bản tin: sửa XML → thêm struct ở `dialects/bringup/.../messages.h
 | ↓ | `COMMAND_LONG` `MAV_CMD_PREFLIGHT_STORAGE` | param1: 0 đọc NV, 1 lưu NV, 2 mặc định |
 
 Lệnh GNSS chỉ được gửi khi máy thu ở trạng thái CONNECTED (ngược lại: bỏ và báo `STATUSTEXT`) – quy tắc của
-`GnssBringup`. Việc ghi UART/đổi baudrate do thread của `svc::GnssReceiver` làm (hàng đợi 8 lệnh, không chặn thread
-nghiệp vụ); hàng đợi đầy -> bỏ và báo. Xem `gnss` (`tx_dropped`).
+`GnssBringup`. Việc ghi UART/đổi baudrate do worker `gnss_tx` của `GnssBringup` làm (hàng đợi 8 lệnh, không chặn thread
+nghiệp vụ); hàng đợi đầy -> bỏ và báo. Xem `gnss` (`tx_dropped`, `tx_errors`).
 
 ### Tham số
 
@@ -116,14 +117,15 @@ Phân lớp (service = cơ chế, business = chính sách):
 | Lớp | Thành phần | Việc |
 |---|---|---|
 | device | `device::NmeaParser` + `device::NmeaFixParser` | ghép câu, kiểm checksum, giải mã GGA/RMC; gom một fix mỗi epoch – hàm thuần |
-| service | `svc::GnssReceiver : IGnssReceiver` (thread `gnss`) | dùng cổng Stream của `ISerialPorts`; rút byte, giải mã, gom fix (`latest_fix()` + số thứ tự), bản sao byte thô (`read_raw()`), hàng đợi lệnh/đổi baud (`send()`), thống kê |
-| business | `app::GnssBringup` | luật `gnss.detect_ms`: không có byte -> dừng receiver, chuyển cổng sang loopback; phát `kGnssFix` khi số thứ tự fix đổi, chuyển tiếp thô nếu `gnss.forward`, chỉ nhận lệnh khi CONNECTED, `BringupStatus`, lệnh CLI `gnss` |
+| service | `svc::SerialStreamPort` (IUart trên cổng Stream của `SerialPortBank`) + `svc::StreamSensorTask<NmeaFixParser, GnssFix>` trong nhóm `SensorScheduler` riêng (thread `gnss`) | đọc cổng, gom fix → `msg::Topic<GnssFix>` (số thứ tự), sức khỏe (`sys sensors`, `kSensorFault`), bản sao byte thô (`read_raw()`); cổng không còn Stream → task trả về ngay, không tranh byte với loopback |
+| business | `app::GnssBringup` (+ worker `gnss_tx`) | luật `gnss.detect_ms`: cổng không nhận byte nào -> chuyển cổng sang loopback; ghi lệnh / đổi baud trên worker `gnss_tx` (ghi UART có thể chặn); phát `kGnssFix` khi số thứ tự fix đổi, chuyển tiếp thô nếu `gnss.forward`, chỉ nhận lệnh khi CONNECTED, `BringupStatus`, lệnh CLI `gnss` |
 
 Sản phẩm/dự án khác cần vị trí GNSS:
 - chỉ đọc (drone, logger…): dùng như một cảm biến – `svc::StreamSensorTask<device::NmeaFixParser, device::GnssFix>`
   trong một nhóm `SensorScheduler` riêng → `msg::Topic<GnssFix>`, có sức khỏe `kSensorFault`/`kSensorRecovered`;
-- cần gửi lệnh cấu hình / byte thô / cổng dùng chung với `SerialPortBank`: dùng `svc::GnssReceiver` (không cần module bring-up).
-Hai cách dùng chung một bộ gom fix (`NmeaFixParser`).
+- cổng do `SerialPortBank` quản lý (đổi chế độ lúc chạy): đọc qua `svc::SerialStreamPort` như sản phẩm này;
+- gửi lệnh tới máy thu: ghi cổng từ một thread được phép chặn (worker của module), như `GnssBringup`.
+Chỉ có MỘT đường GNSS: cảm biến của framework + bộ gom fix `NmeaFixParser`.
 
 `device::NmeaParser` (`platform/device/src/nmea.cpp`, hàm thuần, số nguyên – không cần FPU) nhận từng byte từ cổng
 máy thu, ghép câu `$...*hh`, **bắt buộc đúng checksum**, giải mã **GGA** (giờ, lat/lon, chất lượng fix, số vệ tinh,

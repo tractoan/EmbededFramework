@@ -12,7 +12,8 @@
 #include "osal/time.hpp"
 #include "gnss_bringup/gnss_bringup.hpp"
 #include "serial_bringup/serial_bringup.hpp"
-#include "services/gnss_receiver.hpp"
+#include "services/serial_stream_port.hpp"
+#include "services/sensor_scheduler.hpp"
 #include "messaging/buffer_allocators.hpp"
 #include "test_framework.hpp"
 
@@ -122,47 +123,6 @@ struct TxCapture final : mavlink2::Sender {
 };
 }  // namespace
 
-// Máy thu GNSS giả (không thread): test chính sách của GnssBringup.
-struct FakeGnss final : svc::IGnssReceiver {
-    bool started = false, data = false, tap = false;
-    std::uint32_t start_baud = 0, seq = 0;
-    device::GnssFix fix{};
-    std::string raw;
-    std::vector<std::pair<std::string, std::uint32_t>> sent;   // (dữ liệu, baud)
-    bool full = false;
-    core::Status start(std::uint32_t baud) override {
-        started    = true;
-        start_baud = baud;
-        return core::Status::Ok;
-    }
-    void stop() override { started = false; }
-    bool has_data() const override { return data; }
-    bool latest_fix(device::GnssFix& out, std::uint32_t& s) const override {
-        out = fix;
-        s   = seq;
-        return seq != 0;
-    }
-    void set_raw_tap(bool e) override { tap = e; }
-    std::size_t read_raw(std::uint8_t* d, std::size_t max) override {
-        const std::size_t k = std::min(max, raw.size());
-        std::memcpy(d, raw.data(), k);
-        raw.erase(0, k);
-        return k;
-    }
-    core::Status send(msg::Buffer b, std::uint32_t baud) override {
-        if (full) return core::Status::Busy;
-        sent.emplace_back(std::string(reinterpret_cast<const char*>(b.data()), b.size()), baud);
-        return core::Status::Ok;
-    }
-    svc::GnssStats stats() const override {
-        svc::GnssStats st;
-        st.rx_bytes = data ? 100 : 0;
-        st.baudrate = start_baud;
-        st.fixes    = seq;
-        return st;
-    }
-};
-
 TEST(serial_bringup_loopback_report_and_roles) {
     Ctx c;
     FakePorts ports;
@@ -197,27 +157,101 @@ TEST(serial_bringup_loopback_report_and_roles) {
     CHECK(c.last(bu::kLoopbackStatus, ls) && (ls.ok_mask & 0x2) && c.has_text("Serial 1 loopback PASS"));
 }
 
+namespace {
+const char kRmc[] = "$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A\r\n";
+const char kGga[] = "$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47\r\n";
+
+// Đường GNSS của sản phẩm, không thread: cổng giả -> SerialStreamPort -> (task cảm biến) -> Topic.
+struct GnssRig {
+    FakePorts ports;
+    svc::SerialStreamPort stream{ports, 1, 1};
+    device::NmeaFixParser nmea;
+    msg::Topic<device::GnssFix> topic;
+    app::GnssBringup m{{&ports, 1, 0, &stream, &topic, &nmea}};
+    GnssRig() { ports.st[1].mode = svc::SerialMode::Stream; }
+};
+
+alignas(8) std::uint8_t g_gnss_tx_stack[2048];
+// Chạy worker "gnss_tx" của module tới khi xử lý xong `jobs` việc rồi dừng (join -> test đọc kết quả an toàn).
+void run_worker_until(app::IModule& m, std::uint32_t jobs) {
+    app::ModuleWorkerBase* w = m.worker();
+    CHECK(w != nullptr);
+    if (w == nullptr) return;
+    const osal::ThreadConfig cfg{"gnss_tx", osal::Priority::Normal, sizeof(g_gnss_tx_stack), g_gnss_tx_stack};
+    CHECK(core::is_ok(w->start(&cfg)));
+    for (int i = 0; i < 500 && w->processed() < jobs; ++i) osal::sleep_ms(2);
+    w->stop();
+}
+}  // namespace
+
+TEST(serial_stream_port_reads_taps_and_yields_to_loopback) {
+    FakePorts ports;
+    ports.st[1].mode = svc::SerialMode::Stream;
+    svc::SerialStreamPort sp(ports, 1, 1);
+    CHECK(core::is_ok(sp.open(hal::UartConfig{9600})) && ports.st[1].baudrate == 9600);
+    std::uint8_t buf[64];
+    sp.set_raw_tap(true);
+    ports.incoming(1, "ABCDEF");
+    CHECK_EQ(sp.read(buf, 4, 50), 4u);
+    CHECK_EQ(sp.read(buf, sizeof(buf), 50), 2u);
+    CHECK(sp.read_raw(buf, sizeof(buf)) == 6u && std::memcmp(buf, "ABCDEF", 6) == 0);   // tap: mọi byte đã đọc
+
+    std::uint64_t t0 = osal::now_ms();
+    CHECK_EQ(sp.read(buf, sizeof(buf), 30), 0u);          // Stream, không có byte: chờ hết timeout
+    CHECK(osal::now_ms() - t0 >= 25);
+    CHECK(sp.write(reinterpret_cast<const std::uint8_t*>("CMD"), 3, 100) == 3u && ports.tx[1] == "CMD");
+
+    ports.st[1].mode = svc::SerialMode::Loopback;         // cổng đã thuộc loopback
+    ports.incoming(1, "X");
+    t0 = osal::now_ms();
+    CHECK_EQ(sp.read(buf, sizeof(buf), 1000), 0u);        // trả về NGAY, không tranh byte
+    CHECK(osal::now_ms() - t0 < 100 && ports.rx[1] == "X");
+    CHECK_EQ(sp.write(reinterpret_cast<const std::uint8_t*>("Y"), 1, 100), 0u);   // dãy cổng chặn ghi ngoài Stream
+}
+
+TEST(gnss_sensor_task_over_serial_stream_port) {
+    FakePorts ports;
+    ports.st[1].mode = svc::SerialMode::Stream;
+    svc::SerialStreamPort sp(ports, 1, 1);
+    device::NmeaFixParser nmea;
+    msg::Topic<device::GnssFix> topic;
+    svc::StreamSensorTask<device::NmeaFixParser, device::GnssFix> task("gnss", sp, nmea, topic, 50);
+    ports.incoming(1, std::string(kRmc) + kGga);
+    CHECK(core::is_ok(task.sample(&osal::now_ms)));
+    device::GnssFix f{};
+    msg::TopicStamp st{};
+    CHECK(core::is_ok(topic.read(f, &st)) && st.sequence == 1 && f.year == 1994);   // chưa thấy GGA: RMC ra fix
+    CHECK(core::is_ok(task.sample(&osal::now_ms)));
+    CHECK(core::is_ok(topic.read(f, &st)) && st.sequence == 2 && f.alt_mm == 545400);
+    CHECK(task.sample(&osal::now_ms) == core::Status::Timeout);   // hết dữ liệu
+    ports.st[1].mode = svc::SerialMode::Loopback;
+    const std::uint64_t t0 = osal::now_ms();
+    CHECK(task.sample(&osal::now_ms) == core::Status::Timeout && osal::now_ms() - t0 < 40);   // trả ngay
+    CHECK(nmea.nmea().sentences() == 2 && nmea.fixes() == 2);
+}
+
 TEST(gnss_bringup_absent_switches_port_to_loopback) {
     Ctx c;
-    FakePorts ports;
-    FakeGnss rx;
-    app::GnssBringup m({&rx, &ports, 1, 0});
+    GnssRig r;
+    app::GnssBringup& m = r.m;
     CHECK(core::is_ok(m.on_init(c.ctx)));
     c.params.set(app::params::kGnssBaud, 9600);   // tham số đã nạp từ NV trước on_start
     CHECK(core::is_ok(m.on_start()));
     const std::uint64_t t0 = osal::now_ms();
-    CHECK(rx.started && rx.start_baud == 9600 && rx.tap);
+    CHECK(r.ports.st[1].mode == svc::SerialMode::Stream && r.ports.st[1].baudrate == 9600 && r.stream.raw_tap());
 
     m.on_tick(t0 + 4900);
     CHECK(m.state() == bu::GnssState::Detecting);
-    m.on_tick(t0 + 5100);   // hết cửa sổ 5 s, receiver chưa nhận byte nào
-    CHECK(m.state() == bu::GnssState::Absent && !rx.started);
-    CHECK(ports.st[1].mode == svc::SerialMode::Loopback);
+    m.on_tick(t0 + 5100);   // hết cửa sổ 5 s, cổng chưa nhận byte nào
+    CHECK(m.state() == bu::GnssState::Absent && !r.stream.raw_tap());
+    CHECK(r.ports.st[1].mode == svc::SerialMode::Loopback);
     CHECK(c.has_text("port 1 -> loopback"));
 
     // Lệnh GNSS khi không có máy thu bị bỏ, có thông báo
     m.on_event(msg::Event::make(bu::kGnssTxRequest, bu::GnssTxHeader{0}, msg::Buffer::copy_of("ABC", 3)));
-    CHECK(rx.sent.empty() && c.has_text("command dropped"));
+    CHECK(c.has_text("command dropped"));
+    run_worker_until(m, 1);
+    CHECK(r.ports.tx[1].empty());
     bu::BringupStatus bs{};
     CHECK(c.last_record(bu::kBringupStatus, bs) && bs.gnss_state == bu::GnssState::Absent && bs.gnss_port == 1 &&
           bs.gcs_port == 0 && bs.serial_count == 12);
@@ -225,38 +259,38 @@ TEST(gnss_bringup_absent_switches_port_to_loopback) {
 
 TEST(gnss_bringup_connected_publishes_fix_raw_and_commands) {
     Ctx c;
-    FakePorts ports;
-    FakeGnss rx;
-    app::GnssBringup m({&rx, &ports, 1, 0});
+    GnssRig r;
+    app::GnssBringup& m = r.m;
     m.on_init(c.ctx);
     m.on_start();
     const std::uint64_t t0 = osal::now_ms();
-    rx.data = true;
-    rx.raw  = std::string(100, 'N');
+    r.ports.incoming(1, std::string(100, 'N'));   // byte bất kỳ = có máy thu
+    std::uint8_t sink[128];
+    CHECK_EQ(r.stream.read(sink, sizeof(sink), 0), 100u);   // nhóm cảm biến đọc cổng (ở đây: test) -> tap
     m.on_tick(t0 + 1200);
-    CHECK(m.state() == bu::GnssState::Connected && ports.st[1].mode != svc::SerialMode::Loopback);
+    CHECK(m.state() == bu::GnssState::Connected && r.ports.st[1].mode == svc::SerialMode::Stream);
     CHECK_EQ(c.rec.count(bu::kGnssRxData), 1u);   // 100 byte trong một buffer
     const msg::Event* ge = c.last_event(bu::kGnssRxData);
     CHECK(ge != nullptr && Ctx::text_of(*ge) == std::string(100, 'N'));
     m.on_tick(t0 + 9000);   // đã kết nối: không bao giờ chuyển sang loopback
     CHECK(m.state() == bu::GnssState::Connected);
 
-    // Fix mới (seq tăng) -> đúng một kGnssFix; seq không đổi -> không phát lại
-    rx.fix.lat_e7 = 481173000; rx.fix.lon_e7 = 115166667; rx.fix.time_ms = 45319000;
-    rx.fix.flags  = device::GnssFix::kTimeValid | device::GnssFix::kPositionValid;
-    rx.seq        = 1;
+    // Fix mới (số thứ tự của Topic tăng) -> đúng một kGnssFix; không đổi -> không phát lại
+    device::GnssFix fx{};
+    fx.lat_e7 = 481173000; fx.lon_e7 = 115166667; fx.time_ms = 45319000;
+    fx.flags  = device::GnssFix::kTimeValid | device::GnssFix::kPositionValid;
+    r.topic.publish(fx, t0);
     m.on_tick(t0 + 9020);
     m.on_tick(t0 + 9040);
     device::GnssFix fix{};
     CHECK(c.last_record(bu::kGnssFix, fix) && fix.lat_e7 == 481173000 && c.rec.count(bu::kGnssFix) == 1u);
 
-    // Lệnh tới máy thu -> hàng đợi gửi của service (không chặn thread ứng dụng)
+    // Lệnh tới máy thu -> worker "gnss_tx" đổi baud rồi ghi (không chặn thread ứng dụng)
     m.on_event(msg::Event::make(bu::kGnssTxRequest, bu::GnssTxHeader{38400}, msg::Buffer::copy_of("CFG\r\n", 5)));
-    CHECK(rx.sent.size() == 1 && rx.sent[0].first == "CFG\r\n" && rx.sent[0].second == 38400);
-    rx.full = true;
-    m.on_event(msg::Event::make(bu::kGnssTxRequest, bu::GnssTxHeader{0}, msg::Buffer::copy_of("X", 1)));
-    CHECK(c.has_text("tx queue full"));
-    rx.full = false;
+    for (int k = 0; k < 8; ++k) m.on_event(msg::Event::make(bu::kGnssTxRequest, bu::GnssTxHeader{0}, msg::Buffer::copy_of("Q", 1)));
+    CHECK(c.has_text("tx queue full"));   // hàng đợi 8 việc: việc thứ 9 bị bỏ
+    run_worker_until(m, 8);
+    CHECK(r.ports.tx[1] == "CFG\r\nQQQQQQQ" && r.ports.st[1].baudrate == 38400);
 
     // CLI "gnss send ..." -> event yêu cầu; "gnss" -> trạng thái + fix
     char line[] = "gnss send $PCMD,1 2";
@@ -268,64 +302,17 @@ TEST(gnss_bringup_connected_publishes_fix_raw_and_commands) {
     CaptureOut fo;
     c.cli.execute(gl, fo);
     CHECK(fo.text.find("state=CONNECTED") != std::string::npos && fo.text.find("UTC 12:35:19.000") != std::string::npos &&
-          fo.text.find("lat 48.1173000 lon 11.5166667") != std::string::npos);
+          fo.text.find("lat 48.1173000 lon 11.5166667") != std::string::npos && fo.text.find("tx_dropped=1") != std::string::npos);
 
-    // gnss.forward = 0 -> tắt tap của service, không chuyển tiếp
+    // gnss.forward = 0 -> tắt tap, không chuyển tiếp
     c.params.set(app::params::kGnssForward, 0);
     for (const auto& e : std::vector<msg::Event>(c.rec.events)) m.on_event(e);
-    CHECK(!rx.tap);
+    CHECK(!r.stream.raw_tap());
     const std::size_t before = c.rec.count(bu::kGnssRxData);
-    rx.raw = "XYZ";
+    r.ports.incoming(1, "XYZ");
+    r.stream.read(sink, sizeof(sink), 0);
     m.on_tick(t0 + 9100);
     CHECK_EQ(c.rec.count(bu::kGnssRxData), before);
-}
-
-TEST(gnss_receiver_service_parses_taps_and_sends) {
-    PoolScope pool;
-    FakePorts ports;
-    svc::GnssReceiver rx;
-    svc::GnssReceiver::Config cfg;
-    cfg.ports = &ports;
-    cfg.port  = 1;
-    CHECK(rx.init(cfg) == core::Status::Ok);
-    cfg.port = 20;
-    svc::GnssReceiver bad;
-    CHECK(bad.init(cfg) == core::Status::InvalidArg);
-
-    // Không chạy thread: điều khiển từng vòng bằng process() (thread thật chạy đúng vòng này)
-    CHECK(!rx.has_data());
-    rx.set_raw_tap(true);
-    std::uint64_t now = 1000;
-    ports.incoming(1, "$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A\r\n");
-    rx.process(0, now);
-    device::GnssFix f{};
-    std::uint32_t seq = 0;
-    CHECK(rx.has_data() && rx.latest_fix(f, seq) && seq == 1);   // chưa thấy GGA: gom fix theo RMC
-    ports.incoming(1, "$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47\r\n");
-    rx.process(0, now += 100);
-    CHECK(rx.latest_fix(f, seq) && seq == 2 && f.year == 1994 && f.alt_mm == 545400);
-    ports.incoming(1, "$GPRMC,123520,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*60\r\n");
-    rx.process(0, now += 900);   // đã có GGA đều đặn: RMC không tạo fix mới
-    CHECK(rx.latest_fix(f, seq) && seq == 2);
-    ports.incoming(1, "$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*00\r\n");   // sai checksum
-    rx.process(0, now += 3000);
-    svc::GnssStats st = rx.stats();
-    CHECK(st.sentences == 3 && st.checksum_errors == 1 && st.fixes == 2 && st.last_rx_ms == now && st.rx_bytes > 200);
-
-    // Tap: đúng byte thô theo thứ tự
-    std::uint8_t raw[512];
-    const std::size_t n = rx.read_raw(raw, sizeof(raw));
-    CHECK(n == st.rx_bytes && std::memcmp(raw, "$GPRMC,123519", 13) == 0);
-
-    // Gửi lệnh: hàng đợi (không chặn) -> ghi + đổi baud ở vòng xử lý
-    CHECK(rx.send(msg::Buffer::copy_of("CFG\r\n", 5), 38400) == core::Status::Ok);
-    CHECK(rx.send(msg::Buffer{}, 0) == core::Status::InvalidArg);
-    for (std::size_t k = 1; k < svc::GnssReceiver::kTxQueue; ++k) rx.send(msg::Buffer::copy_of("Q", 1));
-    CHECK(rx.send(msg::Buffer::copy_of("Z", 1)) == core::Status::Busy);
-    rx.process(0, now);
-    CHECK(ports.tx[1] == "CFG\r\n" && ports.st[1].baudrate == 38400 && rx.stats().baudrate == 38400);
-    st = rx.stats();
-    CHECK(st.tx_bytes == 5 && st.tx_dropped == 1);
 }
 
 TEST(io_bringup_outputs_and_inputs) {

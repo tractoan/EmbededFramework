@@ -4,6 +4,7 @@
 
 #include "mavlink/mavlink_protocol.hpp"
 #include "mocks.hpp"
+#include "osal/time.hpp"
 #include "test_framework.hpp"
 
 namespace {
@@ -243,10 +244,13 @@ TEST(mavlink_command_long_and_telemetry) {
 TEST(mavlink_gcs_link_supervision_and_probe) {
     Fixture f;
     CHECK(!f.mav.gcs_connected());
-    f.mav.poll(100);
+    // Mốc thời gian theo đồng hồ thật (HEARTBEAT nhận được đóng dấu bằng osal::now_ms()): không phụ thuộc
+    // việc test chạy sau bao lâu kể từ khi tiến trình khởi động.
+    const std::uint64_t t0 = osal::now_ms();
+    f.mav.poll(t0);
     f.exchange(frame(msgid::kHeartbeat, {0, 0, 0, 0, 6, 8, 0, 4, 3}, 255, 190));   // HEARTBEAT của GCS
     CHECK(f.mav.gcs_connected());
-    f.mav.poll(100 + MavlinkV1Protocol::kGcsTimeoutMs + 1000);
+    f.mav.poll(osal::now_ms() + MavlinkV1Protocol::kGcsTimeoutMs + 1000);
     CHECK(!f.mav.gcs_connected());
 
     const auto good = frame(msgid::kHeartbeat, {0, 0, 0, 0, 6, 8, 0, 4, 3});

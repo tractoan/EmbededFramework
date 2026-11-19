@@ -35,7 +35,7 @@ Mục tiêu:
 ├────────────────────────────────────────────────────────────────────────┤
 │ SERVICES (services/)  dịch vụ hệ thống: có trạng thái, có chính sách   │
 │  ParamStore · CommandService · Logger · Sensor/OutputHub · LedService  │
-│  SerialPortBank (loopback/stream) · GnssReceiver (NMEA, gửi lệnh)      │
+│  SerialPortBank (loopback/stream) · SerialStreamPort (IUart, Stream)   │
 ├────────────────────────────────────────────────────────────────────────┤
 │ MESSAGING (messaging/)  lõi giao tiếp, không phụ thuộc nền tảng        │
 │  Event · EventBus · Buffer + pool tĩnh (BlockPool/Pool/ChainAllocator) │
@@ -161,7 +161,7 @@ EmbededFramework/
 │                               # sensor_scheduler (ISensorTask, SensorTask<>, SensorConfigurator<>, SensorScheduler, SensorHub),
 │                               # sensor_param_binding (tham số -> cấu hình cảm biến, áp dụng ngay),
 │                               # output (Output<Cmd>, OutputHub; LED là một output), periodic_schedule
-│                               # serial_port_bank, gnss_receiver
+│                               # serial_port_bank, serial_stream_port
 ├── communication/
 │   ├── link/                   # byte_stream, protocol, link_manager      (ep_comm)
 │   ├── net/                    # tcp_server/tcp_client/udp stream         (ep_comm_net, khi có mạng)
