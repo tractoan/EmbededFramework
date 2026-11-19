@@ -33,7 +33,7 @@ public:
     std::uint32_t tick_period_ms() const override { return 20; }
     void on_tick(std::uint64_t now_ms) override;
 
-    int on_command(int argc, char** argv, svc::CommandOutput& out) override;   // "gnss"
+    int on_command(int argc, char** argv, svc::CommandReply& out) override;   // "gnss"
 
     bringup::GnssState state() const { return state_; }
 

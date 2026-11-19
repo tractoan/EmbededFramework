@@ -136,7 +136,7 @@ void GnssBringup::on_event(const msg::Event& e) {
     }
 }
 
-int GnssBringup::on_command(int argc, char** argv, svc::CommandOutput& out) {
+int GnssBringup::on_command(int argc, char** argv, svc::CommandReply& out) {
     // Lệnh chạy trên thread của kênh -> chỉ publish yêu cầu, module xử lý trên thread ứng dụng.
     if (argc >= 3 && std::strcmp(argv[1], "send") == 0) {
         char line[core::cfg::kCliLineMax + 2];

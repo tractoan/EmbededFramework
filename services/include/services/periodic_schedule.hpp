@@ -1,5 +1,5 @@
 #pragma once
-// Lịch định kỳ KHÔNG trôi, dùng chung cho SensorScheduler và Actuator (thread riêng):
+// Lịch định kỳ KHÔNG trôi, dùng chung cho SensorScheduler và Output (thread riêng):
 //  - mốc kế tiếp = mốc trước + chu kỳ (thời gian chạy không cộng dồn vào chu kỳ);
 //  - trễ hơn một chu kỳ trọn vẹn -> đếm overrun, đặt lại lịch từ bây giờ, KHÔNG chạy dồn các lần lỡ.
 #include <cstdint>

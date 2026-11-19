@@ -106,7 +106,7 @@ struct Ctx {
     }
 };
 
-struct CaptureOut final : svc::CommandOutput {
+struct CaptureOut final : svc::CommandReply {
     std::string text;
     void write(const char* t, std::size_t n) override { text.append(t, n); }
 };

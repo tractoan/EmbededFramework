@@ -31,7 +31,7 @@ public:
     std::uint32_t tick_period_ms() const override { return period_ms_; }
     void on_tick(std::uint64_t now_ms) override;
 
-    int on_command(int argc, char** argv, svc::CommandOutput& out) override;   // "temp"
+    int on_command(int argc, char** argv, svc::CommandReply& out) override;   // "temp"
 
 private:
     static constexpr std::size_t kMaxWindow = 8;

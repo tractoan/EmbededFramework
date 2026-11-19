@@ -35,9 +35,13 @@ core::Status System::init(const char* product_name, ProductSetupFn setup) {
     params_.init(board_.storage(), &bus_);
     param_cli_.init(&params_);
     commands_.register_command({"param", "list | get <n> | set <n> <v> | save | reset", &param_cli_});
-    commands_.register_command({"sys", "info | modules | sensors | actuators | tasks | buffers | log <0-5> | reboot | quit", &sys_cli_});
+    commands_.register_command({"sys", "info | modules | sensors | outputs | tasks | buffers | log <0-5> | reboot | quit", &sys_cli_});
     leds_.bind(svc::LedId::Status, board_.gpio(hal::GpioId::StatusLed));
     leds_.bind(svc::LedId::Alarm, board_.gpio(hal::GpioId::AlarmLed));
+    // LED là một output loại Indicator: OutputHub lo vòng đời (an toàn lúc khởi động/tắt, thread 50 ms).
+    st = outputs_.add(&leds_.output(), tasks_.leds);
+    if (!core::is_ok(st)) return st;
+    leds_.set(svc::LedId::Status, svc::LedPattern::Heartbeat);   // áp dụng khi thread LED chạy
 
     // 3. Communication: kênh & giao thức do sản phẩm khai báo ở bước 5
     console_stream_.attach(console);
@@ -49,9 +53,9 @@ core::Status System::init(const char* product_name, ProductSetupFn setup) {
 
     // 5. Sản phẩm: module nghiệp vụ + kênh truyền thông
     if (setup == nullptr) return core::Status::InvalidArg;
-    ProductSetup product_setup{modules_, links_, board_, console_stream_, tasks_, sensors_, actuators_};
+    ProductSetup product_setup{modules_, links_, board_, console_stream_, tasks_, sensors_, outputs_};
     st = setup(product_setup);
-    actuators_.write_safe_all();   // sớm nhất có thể: mọi actuator ở trạng thái an toàn trước khi có gì chạy
+    outputs_.write_safe_all();   // sớm nhất có thể: mọi output (LED, actuator) an toàn trước khi có gì chạy
     if (!core::is_ok(st)) {
         LOGE(kTag, "product setup failed: %s", core::to_string(st));
         return st;
@@ -68,17 +72,14 @@ core::Status System::init(const char* product_name, ProductSetupFn setup) {
     }
 
     // 7. Chạy
-    st = leds_.start(tasks_.leds);
-    if (!core::is_ok(st)) return task_start_failed("led", st);
-    leds_.set(svc::LedId::Status, svc::LedPattern::Heartbeat);
     // Từ đây đã có thread đang chạy: lỗi khởi động phải dừng sạch chúng trước khi trả về,
     // nếu không, thread còn sống sẽ khiến việc hủy System bị treo.
     // Cảm biến trước module: tick/event đầu tiên của module đã có dữ liệu trên topic.
-    // Actuator (thread riêng + giám sát) sau cảm biến, trước module: sẵn sàng nhận lệnh (vẫn chưa arm).
+    // Output (thread riêng + giám sát nếu cần) sau cảm biến, trước module: sẵn sàng nhận lệnh (actuator chưa arm).
     st = sensors_.start(&bus_);
     if (core::is_ok(st)) {
-        st = actuators_.start(&bus_, tasks_.actuator_supervisor);
-        if (!core::is_ok(st)) task_start_failed("actuator", st);
+        st = outputs_.start(&bus_, tasks_.output_supervisor);
+        if (!core::is_ok(st)) task_start_failed("output", st);
     } else {
         task_start_failed("sensor", st);
     }
@@ -120,17 +121,13 @@ void System::shutdown() {
     LOGI(kTag, "shutting down...");
     bus_.publish(msg::Event::make(app::sys::kSystemShutdown));
     links_.stop();
-    actuators_.stop();   // ĐẦU TIÊN sau kênh: mọi bộ chấp hành về an toàn trước khi dừng phần còn lại
+    outputs_.stop();   // ĐẦU TIÊN sau kênh: mọi output (kể cả LED) về an toàn trước khi dừng phần còn lại
     sensors_.stop();
     modules_.stop();
-    leds_.set(svc::LedId::Status, svc::LedPattern::Off);
-    leds_.set(svc::LedId::Alarm, svc::LedPattern::Off);
-    leds_.stop();                 // dừng thread LED trước, rồi áp trạng thái Off trên thread này
-    leds_.tick(osal::now_ms());
     LOGI(kTag, "halted");
 }
 
-int System::SysCli::on_command(int argc, char** argv, svc::CommandOutput& out) {
+int System::SysCli::on_command(int argc, char** argv, svc::CommandReply& out) {
     const char* sub = argc >= 2 ? argv[1] : "info";
     if (std::strcmp(sub, "info") == 0) {
         const std::uint64_t up = osal::now_ms();
@@ -172,16 +169,17 @@ int System::SysCli::on_command(int argc, char** argv, svc::CommandOutput& out) {
         }
         return 0;
     }
-    if (std::strcmp(sub, "actuators") == 0) {
-        if (sys_.actuators_.count() == 0) out.print("  (no actuators)\r\n");
-        for (std::size_t i = 0; i < sys_.actuators_.count(); ++i) {
-            const svc::ActuatorStatus a = sys_.actuators_.at(i)->status();
-            out.print("  %-10s %-8s %-11s %s cmd=%lu rej=%lu upd=%lu overrun=%lu safe=%lu\r\n", a.name,
-                      a.threaded ? "threaded" : "direct", svc::to_string(a.reason), a.armed ? "armed  " : "disarmed",
-                      static_cast<unsigned long>(a.commands), static_cast<unsigned long>(a.rejected),
-                      static_cast<unsigned long>(a.updates), static_cast<unsigned long>(a.overruns),
-                      static_cast<unsigned long>(a.safe_events));
+    if (std::strcmp(sub, "outputs") == 0) {
+        if (sys_.outputs_.count() == 0) out.print("  (no outputs)\r\n");
+        for (std::size_t i = 0; i < sys_.outputs_.count(); ++i) {
+            const svc::OutputStatus o = sys_.outputs_.at(i)->status();
+            out.print("  %-10s %-9s %-8s %-11s %s cmd=%lu rej=%lu upd=%lu overrun=%lu safe=%lu\r\n", o.name,
+                      svc::to_string(o.cls), o.threaded ? "threaded" : "direct", svc::to_string(o.reason),
+                      o.armed ? "armed   " : "disarmed", static_cast<unsigned long>(o.commands),
+                      static_cast<unsigned long>(o.rejected), static_cast<unsigned long>(o.updates),
+                      static_cast<unsigned long>(o.overruns), static_cast<unsigned long>(o.safe_events));
         }
+        out.print("  supervisor: %s\r\n", sys_.outputs_.supervising() ? "running" : "not needed (indicators only)");
         return 0;
     }
     if (std::strcmp(sub, "tasks") == 0) {

@@ -6,7 +6,7 @@
 
 namespace svc {
 
-void CommandOutput::print(const char* fmt, ...) {
+void CommandReply::print(const char* fmt, ...) {
     char buf[192];
     va_list ap;
     va_start(ap, fmt);
@@ -43,7 +43,7 @@ bool CommandService::find(const char* name, Command& out) const {
     return false;
 }
 
-void CommandService::print_help(CommandOutput& out) const {
+void CommandService::print_help(CommandReply& out) const {
     osal::LockGuard g(mtx_);
     out.print("  %-8s %s\r\n", "help", "list commands");
     for (std::size_t i = 0; i < count_; ++i) {
@@ -51,7 +51,7 @@ void CommandService::print_help(CommandOutput& out) const {
     }
 }
 
-int CommandService::execute(char* line, CommandOutput& out) {
+int CommandService::execute(char* line, CommandReply& out) {
     char* argv[core::cfg::kCliMaxArgs] = {};
     int argc = 0;
     // Tách token tại chỗ (không dùng strtok_r: không có trong newlib khi build ISO C++ thuần).

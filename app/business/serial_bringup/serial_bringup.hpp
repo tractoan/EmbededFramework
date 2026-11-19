@@ -27,7 +27,7 @@ public:
     std::uint32_t tick_period_ms() const override { return report_ms_; }
     void on_tick(std::uint64_t now_ms) override;
 
-    int on_command(int argc, char** argv, svc::CommandOutput& out) override;   // "serial"
+    int on_command(int argc, char** argv, svc::CommandReply& out) override;   // "serial"
 
     static bringup::SerialRole role_of(svc::SerialMode m);
 

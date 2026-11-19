@@ -90,7 +90,7 @@ void ImuBringup::on_tick(std::uint64_t now_ms) {
     }
 }
 
-int ImuBringup::on_command(int /*argc*/, char** /*argv*/, svc::CommandOutput& out) {
+int ImuBringup::on_command(int /*argc*/, char** /*argv*/, svc::CommandReply& out) {
     const std::uint64_t now = osal::now_ms();
     for (std::size_t i = 0; i < count_; ++i) {
         const device::ImuStats st = ch_[i].imu->stats();

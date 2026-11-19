@@ -67,7 +67,7 @@ void IoBringup::on_event(const msg::Event& e) {
     publish(now_ms_ ? now_ms_ : osal::now_ms());   // phản hồi ngay trạng thái mới
 }
 
-int IoBringup::on_command(int argc, char** argv, svc::CommandOutput& out) {
+int IoBringup::on_command(int argc, char** argv, svc::CommandReply& out) {
     // Lệnh chạy trên thread của kênh -> chỉ publish yêu cầu, module áp dụng trên thread ứng dụng.
     bringup::OutputSetRequest req{};
     bool request = false;

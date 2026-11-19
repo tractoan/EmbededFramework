@@ -30,7 +30,7 @@ public:
     std::uint32_t tick_period_ms() const override { return period_ms_; }
     void on_tick(std::uint64_t now_ms) override;
 
-    int on_command(int argc, char** argv, svc::CommandOutput& out) override;   // "imu"
+    int on_command(int argc, char** argv, svc::CommandReply& out) override;   // "imu"
 
 private:
     std::array<Channel, kMaxImu> ch_{};

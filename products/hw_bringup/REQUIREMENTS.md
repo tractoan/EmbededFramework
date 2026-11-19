@@ -165,6 +165,7 @@
 | 2026-11-13 | | Cập nhật theo main (SensorScheduler, Topic, Actuator): IMU đọc qua `SensorScheduler` + `msg::Topic`, driver `device::HdlcImu` không thread. DO chưa chuyển sang `Actuator` (cần quyết định arm/deadman). Không đổi yêu cầu. |
 | 2026-11-13 | | Cập nhật theo main (Nios II, PR #9): các mã framework của nhánh bị trùng được đánh số lại – SRC-18…21, HAL-017…020, TGT-008, VER-013/014, PLN-013/014. Không đổi yêu cầu. |
 | 2026-11-13 | | Cập nhật theo main (đặc tả yêu cầu framework `docs/REQUIREMENTS.md`): bổ sung các yêu cầu tầng framework của nhánh (HAL-017…020, DEV-003…006, SVC-008/009, COMM-008/009, TGT-008, PROD-005…007, DEF-011…016). |
+| 2026-11-19 | | Cập nhật theo main (PR #10, gộp output): `CommandOutput` → `CommandReply` trong các module bring-up; LED là output loại Indicator (`sys outputs`); mã framework của nhánh bị trùng được đánh số lại – SRC-19…22, DD-09/10. DO vẫn chưa chuyển sang `Output<Cmd>` (cần quyết định arm/deadman, PLN-013). Không đổi yêu cầu. |
 | | | |
 
 ---

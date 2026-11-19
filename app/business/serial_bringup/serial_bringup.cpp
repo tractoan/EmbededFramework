@@ -90,7 +90,7 @@ void SerialBringup::on_event(const msg::Event& e) {
     }
 }
 
-int SerialBringup::on_command(int argc, char** argv, svc::CommandOutput& out) {
+int SerialBringup::on_command(int argc, char** argv, svc::CommandReply& out) {
     if (argc >= 2 && std::strcmp(argv[1], "reset") == 0) {
         for (std::size_t i = 0; i < cfg_.ports->count(); ++i) cfg_.ports->reset_counters(i);
         out.print("counters cleared\r\n");
